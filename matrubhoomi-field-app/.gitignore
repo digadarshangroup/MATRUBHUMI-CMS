@@ -1,0 +1,18 @@
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+app/build/
+
+# Signing material. A release keystore in a repository is the whole identity of
+# the app — anybody holding it can publish an update that Android will accept.
+*.jks
+*.keystore
+keystore.properties
+google-services.json

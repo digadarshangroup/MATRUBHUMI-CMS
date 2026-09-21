@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!--
+      Release builds talk HTTPS and nothing else. There is no LAN exception
+      here because a config cannot express "any private address" — it matches
+      domains, not CIDR ranges — and a list of guessed subnets would be a
+      cleartext hole that looks like a rule.
+
+      The debug source set replaces this whole file (src/debug/res/xml/) with
+      one that permits cleartext, so a developer can point the app at a laptop.
+      That version is compiled into the .debug application id only and can
+      never ship as the release APK.
+    -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

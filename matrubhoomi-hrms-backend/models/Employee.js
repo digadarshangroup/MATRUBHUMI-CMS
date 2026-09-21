@@ -1,0 +1,628 @@
+// models/Employee.js
+
+const mongoose = require("mongoose");
+const bcrypt = require("bcryptjs");
+
+// Custom field schema - allows HR to add dynamic fields per section
+const customFieldSchema = new mongoose.Schema(
+  {
+    key: { type: String, trim: true, required: true },
+    label: { type: String, trim: true, required: true },
+    value: { type: String, trim: true },
+    fieldType: {
+      type: String,
+      enum: ["text", "number", "date", "select", "boolean"],
+      default: "text",
+    },
+  },
+  { _id: false },
+);
+
+const employeeSchema = new mongoose.Schema({
+  // ─── PERSONAL / BASIC INFORMATION ────────────────────────────────────────────
+  title: { type: String, enum: ["Mr.", "Mrs.", "Ms.", "Dr.", ""], default: "" },
+  firstName: { type: String, trim: true },
+  middleName: { type: String, trim: true },
+  lastName: { type: String, trim: true },
+  nickName: { type: String, trim: true },
+
+  email: {
+    type: String,
+    lowercase: true,
+    trim: true,
+    sparse: true, // unique when provided, allows multiple null/undefined
+  },
+  password: { type: String },
+  temporaryPassword: { type: String, select: false },
+
+  phone: { type: String },
+  alternatePhone: { type: String },
+  // The number the company gives them, as opposed to `phone`, which is the
+  // personal one they log into the app with. Deliberately NOT surfaced in any
+  // company-wide list — the same rule that keeps numbers off Who's away.
+  workPhone: { type: String, trim: true },
+  extension: { type: String }, // office extension number
+
+  dateOfBirth: { type: Date },
+  gender: {
+    type: String,
+    enum: ["Male", "Female", "Other", "male", "female"],
+    default: "",
+  },
+  bloodGroup: { type: String },
+  maritalStatus: {
+    type: String,
+    default: "",
+  },
+  marriageDate: { type: Date },
+  spouseName: { type: String, trim: true },
+  spouseDOB: { type: Date },
+  nationality: { type: String, trim: true },
+  religion: { type: String, trim: true },
+  placeOfBirth: { type: String, trim: true },
+  countryOfOrigin: { type: String, trim: true },
+  residentialStatus: { type: String, trim: true },
+
+  // Parent / Family
+  fatherFirstName: { type: String, trim: true },
+  fatherMiddleName: { type: String, trim: true },
+  fatherLastName: { type: String, trim: true },
+  fatherDateOfBirth: { type: Date },
+  motherFirstName: { type: String, trim: true },
+  motherMiddleName: { type: String, trim: true },
+  motherLastName: { type: String, trim: true },
+
+  // Flags
+  isDirector: { type: Boolean, default: false },
+  isInternational: { type: Boolean, default: false },
+  isPhysicallyChallenged: { type: Boolean, default: false },
+
+  // Personal Email (separate from work email)
+  personalEmail: { type: String, lowercase: true, trim: true },
+
+  // Profile Photo
+  profilePhoto: {
+    url: String,
+    publicId: String,
+  },
+
+  // Custom fields for Personal Info section
+  personalCustomFields: { type: [customFieldSchema], default: [] },
+
+  // ─── WORK INFORMATION ────────────────────────────────────────────────────────
+  biometricId: { type: String, sparse: true },
+  identityId: { type: String, sparse: true },
+  needsToOperate: { type: Boolean, default: false },
+
+  department: { type: String },
+  departmentId: { type: mongoose.Schema.Types.ObjectId, ref: "Department" },
+
+  // Which CMS department this employee may sign in to.
+  //
+  // Separate from `departmentId` above on purpose. That one is the HR org
+  // chart — a label for reporting, renamed freely by HR staff. This one is an
+  // ACCESS grant, and an HR rename must never silently change who can log in
+  // where. An employee with this unset cannot reach any dashboard; they can
+  // still open the onboarding page, which is public, but every login attempt
+  // is refused by the server.
+  accessDepartmentId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "AccessDepartment",
+    default: null,
+    index: true,
+  },
+
+  // Additional departments this employee may sign in to.
+  //
+  // A project manager who also needs to see Store, a supervisor covering QC.
+  // `accessDepartmentId` above stays as the PRIMARY — the one they land on by
+  // default — and this holds the rest. Kept as a separate field rather than
+  // folding the primary into an array so that nothing already reading
+  // accessDepartmentId has to change.
+  //
+  // The union of the two is what the server enforces at login; the onboarding
+  // page shows exactly that set and nothing else.
+  additionalDepartmentIds: {
+    type: [{ type: mongoose.Schema.Types.ObjectId, ref: "AccessDepartment" }],
+    default: [],
+  },
+  designation: { type: String, trim: true },
+  jobPosition: { type: String }, // kept for backward compat
+  jobTitle: { type: String },
+
+  primaryManager: {
+    managerId: { type: mongoose.Schema.Types.ObjectId, ref: "Employee" },
+    managerName: { type: String },
+  },
+  secondaryManager: {
+    managerId: { type: mongoose.Schema.Types.ObjectId, ref: "Employee" },
+    managerName: { type: String },
+  },
+
+  dateOfJoining: { type: Date },
+  confirmationDate: { type: Date },
+  probationPeriod: { type: Number, default: 0 }, // in months
+
+  employmentType: {
+    type: String,
+    enum: ["full_time", "part_time", "contract", "intern", ""],
+    default: "",
+  },
+
+  // ─── INTERNSHIP ────────────────────────────────────────────────────────────
+  //  An intern is an Employee with employmentType "intern", not a record in
+  //  some other collection. Attendance, leave, documents and the biometric ID
+  //  all key off this collection; a parallel one would mean a second copy of
+  //  every one of them.
+  //
+  //  What actually differs is money and access, and both are handled where
+  //  they belong: services/payroll pays a prorated stipend with no statutory
+  //  components (see Payroll_section.js), and the app login refuses them
+  //  outright (Employee_Routes/login.js).
+  //
+  //  stipendType is the arrangement, and there are three:
+  //    paid       the company pays them a monthly stipend
+  //    unpaid     no money changes hands
+  //    self_paid  the internship is funded by the intern or their institution
+  //  Only "paid" has an amount, and it lives in salary.stipend with every
+  //  other pay figure — encrypted, because it is compensation.
+  internship: {
+    stipendType: {
+      type: String,
+      enum: ["paid", "unpaid", "self_paid"],
+      default: undefined,
+    },
+    startDate: { type: Date },
+    endDate: { type: Date },
+  },
+  workLocation: { type: String, default: "Matrubhoomi Farms & Developers" },
+  // Legacy free-text shift label. Kept as-is: it is written by the employee
+  // importer, exported again, and shown on the profile screen. Repurposing it
+  // would fail to cast every existing string.
+  shift: { type: String, trim: true },
+
+  // The shift attendance is actually JUDGED against.
+  //
+  // "core" and "general" name the two presets in attendance settings — and
+  // mind the inversion documented in services/shiftPolicy.js, where UI "Core"
+  // is stored as shifts.executive. "custom" carries this person's own hours,
+  // with the grace periods coming from the shared custom profile in settings.
+  //
+  // Left unset, attendance falls back to the department/designation mapping
+  // that decided it before, so nobody's status changes until HR sets one.
+  workShift: {
+    mode: { type: String, enum: ["core", "general", "custom"], default: undefined },
+    start: { type: String, trim: true }, // "HH:MM", custom only
+    end: { type: String, trim: true },   // "HH:MM", custom only
+
+    // How many times this person is expected to touch the reader in a day.
+    // Custom only: Core is the 2-punch office day and General the 6-punch
+    // production one, so those two answer it by themselves.
+    //
+    // Per person, and not a setting, because it does not follow from the
+    // hours. Two people can both be on 06:00-14:00 and one of them punches
+    // for lunch while the other does not — a housekeeper and a night guard
+    // are the example that started this. A shared default would be wrong for
+    // whichever of them lost the coin toss, and getting it wrong is not
+    // cosmetic: a day with fewer punches than expected is flagged as a
+    // miss-punch for HR to clear by hand, every day, forever.
+    punches: { type: Number, min: 1, max: 12 },
+  },
+
+  status: { type: String, default: "active" },
+  isActive: { type: Boolean, default: true },
+
+  // Custom fields for Work section
+  workCustomFields: { type: [customFieldSchema], default: [] },
+
+  // ─── SALARY INFORMATION ──────────────────────────────────────────────────────
+  //  All monetary fields are stored as AES-256-GCM encrypted strings.
+  //  Schema type is Mixed so Mongoose accepts either the legacy Number
+  //  (old records before encryption was added) or the new encrypted String.
+  //  Use salaryEncryption.decryptEmployeeDoc() to get plain numbers back.
+  salary: {
+    // ── HR Input ──────────────────────────────────────────────────────────────
+    gross: { type: mongoose.Schema.Types.Mixed, default: 0 },
+
+    // An intern's monthly stipend. Kept here, alongside gross, so it rides the
+    // encryption and the decryptEmployeeDoc() path that every existing reader
+    // already goes through rather than needing a second one. Mutually
+    // exclusive with gross in practice: the pre-save hook below computes the
+    // statutory breakdown for one and refuses to for the other.
+    stipend: { type: mongoose.Schema.Types.Mixed, default: 0 },
+
+    // ── Earnings (auto) ───────────────────────────────────────────────────────
+    basic: { type: mongoose.Schema.Types.Mixed, default: 0 },
+    hra: { type: mongoose.Schema.Types.Mixed, default: 0 },
+    specialAllowance: { type: mongoose.Schema.Types.Mixed, default: 0 },
+
+    // ── PF (auto) ─────────────────────────────────────────────────────────────
+    epf: { type: mongoose.Schema.Types.Mixed, default: 0 },
+    epfOverride: { type: Boolean, default: false }, // kept as boolean
+    edli: { type: mongoose.Schema.Types.Mixed, default: 0 },
+    edliOverride: { type: Boolean, default: false }, // kept as boolean
+    adminCharges: { type: mongoose.Schema.Types.Mixed, default: 0 },
+    adminOverride: { type: Boolean, default: false }, // kept as boolean
+
+    // ── ESI on Basic ─────────────────────────────────────────────────────────
+    eeesic: { type: mongoose.Schema.Types.Mixed, default: 0 },
+    erEsic: { type: mongoose.Schema.Types.Mixed, default: 0 },
+    foodAllowance: { type: mongoose.Schema.Types.Mixed, default: 0 },
+
+    // ── Totals (auto) ─────────────────────────────────────────────────────────
+    employerCost: { type: mongoose.Schema.Types.Mixed, default: 0 },
+    totalDeduction: { type: mongoose.Schema.Types.Mixed, default: 0 },
+    netSalary: { type: mongoose.Schema.Types.Mixed, default: 0 },
+
+    // ── Other deduction ───────────────────────────────────────────────────────
+    // A standing monthly deduction — canteen, transport, whatever the company
+    // recovers from pay. Optional, and zero for most people.
+    //
+    // Charged for the days they were THERE, not as a flat monthly figure:
+    // payroll prorates it by (days in month − approved leave days) ÷ days in
+    // month. Somebody on leave for a week is not consuming the thing being
+    // deducted for, so they are not charged for that week. Sundays, week-offs
+    // and holidays ARE charged — the month is the month.
+    //
+    // Encrypted like every other pay figure. See Payroll_section.js for the
+    // proration, which is where the leave days come from.
+    otherDeduction: { type: mongoose.Schema.Types.Mixed, default: 0 },
+
+    // ── Legacy ────────────────────────────────────────────────────────────────
+    allowances: { type: mongoose.Schema.Types.Mixed, default: 0 },
+    deductions: { type: mongoose.Schema.Types.Mixed, default: 0 },
+  },
+
+  // Bank Details
+  bankDetails: {
+    bankName: { type: String },
+    accountNumber: { type: String },
+    ifscCode: { type: String },
+    accountType: {
+      type: String,
+      enum: ["savings", "current", ""],
+      default: "",
+    },
+    branchName: { type: String },
+  },
+
+  // Custom fields for Salary section
+  salaryCustomFields: { type: [customFieldSchema], default: [] },
+
+  // ─── DOCUMENTS ───────────────────────────────────────────────────────────────
+  documents: {
+    aadharNumber: { type: String, sparse: true },
+    panNumber: { type: String, sparse: true },
+    uanNumber: { type: String, sparse: true },
+    passportNumber: { type: String },
+    voterIdNumber: { type: String },
+    drivingLicenseNumber: { type: String },
+    esicNumber: { type: String },
+    pfNumber: { type: String },
+
+    // File uploads
+    aadharFile: { url: String, publicId: String },
+    panFile: { url: String, publicId: String },
+    resumeFile: { url: String, publicId: String },
+    offerLetterFile: { url: String, publicId: String },
+    appointmentLetterFile: { url: String, publicId: String },
+    educationalCertificates: [{ url: String, publicId: String, title: String }],
+    additionalDocuments: [
+      {
+        title: String,
+        url: String,
+        publicId: String,
+        uploadedAt: { type: Date, default: Date.now },
+      },
+    ],
+  },
+
+  // Custom fields for Documents section
+  documentCustomFields: { type: [customFieldSchema], default: [] },
+
+  // ─── ADDRESS ─────────────────────────────────────────────────────────────────
+  address: {
+    current: {
+      street: { type: String },
+      city: { type: String },
+      state: { type: String },
+      pincode: { type: String },
+      country: { type: String, default: "India" },
+      ownershipType: {
+        type: String,
+        enum: ["rental", "owned", "company_provided", ""],
+        default: "",
+      },
+    },
+    permanent: {
+      street: String,
+      city: String,
+      state: String,
+      pincode: String,
+      country: { type: String, default: "India" },
+      ownershipType: {
+        type: String,
+        enum: ["rental", "owned", "company_provided", ""],
+        default: "",
+      },
+    },
+  },
+
+  // Custom fields for Address section
+  addressCustomFields: { type: [customFieldSchema], default: [] },
+
+  // ─── EMAIL TRACKING ──────────────────────────────────────────────────────────
+  welcomeEmailSent: { type: Boolean, default: false },
+  emailSentAt: { type: Date },
+  emailError: { type: String },
+
+  // ── PATCH for models/Employee.js ─────────────────────────────────────────────
+  // Replace the sopPoints section in the employeeSchema with this:
+
+  // ─── SOP COMPLIANCE ──────────────────────────────────────────────────────────
+  // Yearly point records — one entry per year.
+  // totalDeducted is the NET score:
+  //   Positive value = violations are adding up (bad)
+  //   Negative value = rewards outweigh violations (excellent)
+  sopPoints: [
+    {
+      year: { type: Number }, // e.g. 2026
+      totalDeducted: { type: Number, default: 0 },
+      bleaches: [
+        {
+          sopId: { type: mongoose.Schema.Types.ObjectId, ref: "Sop" },
+
+          // ── Policy reference ───────────────────────────────────────────────
+          // Set when this bleach was created from a Compliance Policy violation
+          // (e.g. an attendance C4 deduction). Used to de-duplicate attendance
+          // suggestions so the same violation is never recorded twice.
+          policyId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Policy",
+            default: null,
+          },
+
+          // ── Category tag ───────────────────────────────────────────────────
+          // The SOP category this bleach belongs to — "C1", "C2", "C3", "C4".
+          // Replaces folderName for policy-driven entries that have no SOP
+          // folder. Folder-based SOP bleaches may leave this empty.
+          type: { type: String, default: "" },
+
+          sopName: { type: String },
+          folderName: { type: String, default: "Uncategorized" },
+          points: { type: Number },
+          description: { type: String },
+          date: { type: String }, // "YYYY-MM-DD"
+          cutBy: { type: String },
+          cutByName: { type: String },
+          cutByRole: { type: String },
+
+          // ── bleachType ────────────────────────────────────────────────────
+          // "credit" = SOP violation charged to employee
+          //            → adds to totalDeducted (penalty goes UP)
+          //            → shown in RED in the history UI
+          //
+          // "debit"  = Goal task reward: employee submitted on-time
+          //            → subtracts from totalDeducted (penalty goes DOWN)
+          //            → shown in GREEN in the history UI
+          //
+          // Default is "credit" so all normal SOP bleaches are violations.
+          bleachType: {
+            type: String,
+            enum: ["credit", "debit"],
+            default: "credit",
+          },
+
+          // Legacy boolean kept for backward compat with old entries.
+          // isCredit:true is treated the same as bleachType:"debit" in the UI.
+          isCredit: { type: Boolean, default: false },
+
+          // Optional refs for goal-task debit credits
+          taskId: { type: String, default: null },
+          componentId: { type: String, default: null },
+
+          // ── Recheck ────────────────────────────────────────────────────────
+          recheck: {
+            status: { type: String, default: "none" },
+            requestedAt: { type: Date, default: null },
+            requestNote: { type: String, default: "" },
+            reviewedBy: { type: String, default: null },
+            reviewedByName: { type: String, default: null },
+            reviewedAt: { type: Date, default: null },
+            reviewNote: { type: String, default: "" },
+          },
+        },
+      ],
+    },
+  ],
+  // ─── TIMER SOP ACCUMULATORS ───────────────────────────────────────────────────
+  timerDeficitAccumHrs: { type: Number, default: 0 },
+  timerOvertimeAccumHrs: { type: Number, default: 0 },
+  lastFinalizedDate: { type: String, default: null }, // "YYYY-MM-DD", IST
+
+  // ─── PUSH NOTIFICATIONS ──────────────────────────────────────────────────────
+  // Expo push token for the native mobile app (Android/iOS)
+  pushToken: { type: String, default: null },
+  fcmToken: { type: String, default: null },
+
+  // ─── SYSTEM ──────────────────────────────────────────────────────────────────
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "HRDepartment" },
+  // Denormalised actor names, so "who created / who last edited" reads without a
+  // join and stays correct even if that account is later renamed or removed.
+  // The authoritative per-edit trail lives in the change_logs collection; these
+  // two are the convenience copy shown on the record itself.
+  createdByName: { type: String, default: "" },
+  updatedBy: { type: mongoose.Schema.Types.ObjectId },
+  updatedByName: { type: String, default: "" },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now },
+});
+
+// ─── INDEXES ────────────────────────────────────────────────────────────────────
+employeeSchema.index({ biometricId: 1 }, { unique: true, sparse: true });
+employeeSchema.index({ identityId: 1 }, { unique: true, sparse: true });
+employeeSchema.index({ email: 1 }, { unique: true, sparse: true });
+
+// ─── PRE-SAVE HOOKS ──────────────────────────────────────────────────────────────
+employeeSchema.pre("save", async function (next) {
+  if (!this.salary) {
+    this.updatedAt = Date.now();
+    return next();
+  }
+  try {
+    const SalaryConfig = require("./Salaryconfig");
+    const {
+      decryptSalaryFields,
+      encryptSalaryFields,
+    } = require("../utils/salaryEncryption");
+
+    // ── Interns take the short road ──────────────────────────────────────────
+    // A stipend has no components. Splitting it into basic and HRA, deducting
+    // provident fund from it and enrolling it in ESI would all be inventions —
+    // there is no such arrangement to describe. So an intern's salary object
+    // holds the stipend and nothing else, and every derived figure is written
+    // as zero rather than left at whatever a previous employment type put
+    // there. Somebody converted from employee to intern must not keep a
+    // basic and an EPF from their old contract.
+    if (this.employmentType === "intern") {
+      const prev = decryptSalaryFields(this.salary);
+      const stipend = Number(prev.stipend) || 0;
+      const encrypted = encryptSalaryFields({
+        stipend,
+        gross: 0,
+        basic: 0,
+        hra: 0,
+        specialAllowance: 0,
+        epf: 0,
+        edli: 0,
+        adminCharges: 0,
+        eeesic: 0,
+        erEsic: 0,
+        foodAllowance: 0,
+        employerCost: stipend,
+        totalDeduction: 0,
+        netSalary: stipend,
+        allowances: 0,
+        deductions: 0,
+        // Carried through: it is HR's input, not a derived figure, and this
+        // hook replaces the whole salary object.
+        otherDeduction: Number(prev.otherDeduction) || 0,
+      });
+      encrypted.epfOverride = false;
+      encrypted.edliOverride = false;
+      encrypted.adminOverride = false;
+      this.salary = encrypted;
+      this.updatedAt = Date.now();
+      return next();
+    }
+
+    const cfg = await SalaryConfig.getSingleton();
+
+    // ── 1. Decrypt first so all arithmetic works on plain numbers ────────────
+    const s = decryptSalaryFields(this.salary);
+
+    const basicPct = (cfg.basicPct ?? 50) / 100;
+    const hraPct = (cfg.hraPct ?? 50) / 100;
+    const eepfPct = (cfg.eepfPct ?? 12) / 100;
+    const epfCapAmount = cfg.epfCapAmount ?? 1800;
+    const edliPct = (cfg.edliPct ?? 0.5) / 100;
+    const edliCapAmount = cfg.edliCapAmount ?? 15000;
+    const adminPct = (cfg.adminChargesPct ?? 0.5) / 100;
+    const esiWageLimit = cfg.esiWageLimit ?? 21000;
+    const eeEsicPct = (cfg.eeEsicPct ?? 0.75) / 100;
+    const erEsicPct = (cfg.erEsicPct ?? 3.25) / 100;
+
+    const gross = s.gross || 0;
+    const basic = Math.round(gross * basicPct);
+    const hra = Math.round(gross * hraPct);
+
+    // EPF — respect HR override. When epfOverride is set, the HR-entered epf
+    // value is kept verbatim instead of being recomputed from basic.
+    const epf = s.epfOverride
+      ? s.epf || 0
+      : Math.round(Math.min(basic * eepfPct, epfCapAmount));
+    const edli = s.edliOverride
+      ? s.edli || 0
+      : Math.round(Math.min(basic * edliPct, edliCapAmount));
+    const adminCharges = s.adminOverride
+      ? s.adminCharges || 0
+      : Math.round(basic * adminPct);
+
+    const esiApplicable = basic <= esiWageLimit;
+    const eeesic = esiApplicable ? Math.ceil(basic * eeEsicPct) : 0;
+    const erEsic = esiApplicable ? Math.ceil(basic * erEsicPct) : 0;
+
+    const foodAllowance = cfg.foodAllowance ?? 1600;
+    const employerCost = gross + epf + erEsic + foodAllowance;
+    const totalDeduction = epf + eeesic;
+    const netSalary = Math.max(gross - totalDeduction, 0);
+
+    // ── 2. Build the plain calculated object ─────────────────────────────────
+    const calculated = {
+      gross,
+      basic,
+      hra,
+      epf,
+      edli,
+      adminCharges,
+      epfOverride: this.salary.epfOverride || false,
+      edliOverride: this.salary.edliOverride || false,
+      adminOverride: this.salary.adminOverride || false,
+      eeesic,
+      erEsic,
+      foodAllowance,
+      employerCost,
+      totalDeduction,
+      netSalary,
+      allowances: hra,
+      deductions: totalDeduction,
+      // Zeroed, not omitted: encryptSalaryFields replaces this.salary
+      // wholesale, so an intern promoted to staff would otherwise keep a
+      // stipend sitting beside their new gross.
+      stipend: 0,
+      // Kept, not zeroed — unlike the stipend, this is HR's input and applies
+      // to staff and interns alike.
+      otherDeduction: Number(s.otherDeduction) || 0,
+    };
+
+    // ── 3. Encrypt all monetary fields before persisting ─────────────────────
+    const encrypted = encryptSalaryFields(calculated);
+    // Preserve boolean override flags (not encrypted)
+    encrypted.epfOverride = calculated.epfOverride;
+    encrypted.edliOverride = calculated.edliOverride;
+    encrypted.adminOverride = calculated.adminOverride;
+
+    this.salary = encrypted;
+    this.updatedAt = Date.now();
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Hash password before saving
+employeeSchema.pre("save", async function (next) {
+  try {
+    if (!this.isModified("password") || !this.password) return next();
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── VIRTUALS ────────────────────────────────────────────────────────────────────
+employeeSchema.virtual("fullName").get(function () {
+  return [this.firstName, this.middleName, this.lastName]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+});
+
+// Backward compat virtual
+employeeSchema.virtual("employeeId").get(function () {
+  return this.biometricId;
+});
+
+module.exports = mongoose.model("Employee", employeeSchema);

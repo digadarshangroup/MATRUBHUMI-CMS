@@ -1,0 +1,54 @@
+# Repo-wide safety net. Each sub-project keeps its own .gitignore as well —
+# git applies those relative to their own folder, so both layers are in force.
+
+# ===============================
+# Dependencies / build output
+# ===============================
+node_modules/
+.next/
+out/
+dist/
+build/
+.gradle/
+.kotlin/
+*.tsbuildinfo
+
+# ===============================
+# Secrets — never commit these.
+# .env.example documents every key and IS tracked.
+# ===============================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+keystore.properties
+local.properties
+serviceAccount*.json
+firebase-adminsdk*.json
+google-services.json
+
+# ===============================
+# Logs / temp
+# ===============================
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+tmp/
+temp/
+
+# ===============================
+# OS / editor
+# ===============================
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.iml
+*.swp

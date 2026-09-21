@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The splash/window theme only. Everything after the first frame is
+         Compose (ui/theme/Theme.kt), which carries the same palette as the web
+         side. Matching the window background to the app's page ground is what
+         stops the white flash on cold start. -->
+    <style name="Theme.MatrubhoomiField" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:windowBackground">@color/ground</item>
+        <item name="android:statusBarColor">@color/ground</item>
+        <item name="android:navigationBarColor">@color/ground</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

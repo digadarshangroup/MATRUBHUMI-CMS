@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!--
+      "Allow all the time". Android 10+ makes this a SEPARATE, second request
+      that can only be asked for after foreground location has been granted, and
+      on 11+ it cannot be asked for in a dialog at all — the app has to send the
+      person to Settings. PermissionFlow.kt walks that staircase; asking for it
+      alongside the others silently fails and the service then runs blind
+      whenever the screen is off.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!--
+      The exemption request. This app is sideloaded and internal — it is not
+      distributed through Play, where this permission is restricted to a short
+      list of app categories. It exists because Doze and the OEM "battery
+      saver" layers on Xiaomi, Vivo, Oppo and Samsung will otherwise freeze a
+      location service within minutes of the screen going off, and a tracker
+      that stops when the phone is pocketed is not a tracker.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!--
+      The heartbeat that puts the service back after an OEM cleaner kills it.
+      It has to be an EXACT alarm for two reasons: an inexact one is deferred
+      into the next Doze maintenance window (up to fifteen minutes of silence),
+      and — more importantly — an exact alarm is one of the documented
+      exemptions from Android 12's ban on starting a foreground service from the
+      background. An inexact alarm firing would find itself unable to restart
+      the very service it exists to restart.
+    -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
+    <application
+        android:name=".FieldApp"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.MatrubhoomiField"
+        android:networkSecurityConfig="@xml/network_security_config"
+        tools:targetApi="35">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.MatrubhoomiField">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          foregroundServiceType="location" is what lets this keep receiving
+          fixes while the app is not visible. Without it, Android 10+ delivers
+          location a few times an hour to a backgrounded process and the trail
+          becomes a handful of disconnected dots.
+
+          stopWithTask="false": swiping the app away from Recents must NOT kill
+          the service. That gesture means "I am done looking at it", not "stop
+          recording my round" — and on most handsets it is how people close
+          every app.
+        -->
+        <service
+            android:name=".location.LocationService"
+            android:enabled="true"
+            android:exported="false"
+            android:stopWithTask="false"
+            android:foregroundServiceType="location" />
+
+        <receiver
+            android:name=".location.BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <!-- Some OEM builds send this one instead on a quick boot. -->
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Restarts the service after the system, or an OEM cleaner, kills it. -->
+        <receiver
+            android:name=".location.RestartReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
+        <!-- The camera hands back a photo through a content URI, never a file path. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+</manifest>

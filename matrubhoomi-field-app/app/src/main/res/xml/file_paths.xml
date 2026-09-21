@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Where the camera writes. Under cache/ on purpose: a field photo is
+         uploaded and then irrelevant, and cache is what Android reclaims first
+         when a handset runs out of room. -->
+    <cache-path name="photos" path="photos/" />
+</paths>

@@ -1,0 +1,1175 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+/* The measurement kit the attendance and department screens are built on.
+   Everything in it is scoped to `.mb-ui`, so the flat --g-* system below still
+   governs everywhere else. Imported here because Tailwind v4 reads `@theme`
+   only from the stylesheet it compiles. */
+@import "./ui-kit.css";
+/* The `dark:` utility fires under either theme trigger: the legacy `.dark`
+   class some older layouts still toggle, and the product-wide
+   `data-mb-theme="dark"` set by the shared top bar. Keyed on `.dark` alone,
+   dark styling silently never fires on any screen that uses only the
+   attribute. */
+@custom-variant dark (&:is(.dark *, [data-mb-theme="dark"] *));
+/* HR ambient ground + sidebar skin active */
+
+/*
+ * ONE token layer.
+ *
+ * These shadcn-style names (--background, --card, --primary, --border, …) are
+ * read by ~330 utility usages across the app (all of components/ui/*, the
+ * accountant/store/PM/sales modules). They used to carry their own hardcoded
+ * greys — a pale `#f5f6f7` body and a slate `#495057` primary — that had no
+ * relationship to the Matrubhoomi palette the portal, rail and HR screens use, so the
+ * page ground never matched the cards sitting on it.
+ *
+ * They are ALIASES onto the `--g-*` tokens (declared further down, once per
+ * theme). Aliasing rather than duplicating means there is a single source of
+ * colour truth: retune `--g-*` and every shadcn-styled surface follows. Because
+ * `--g-*` flips under the dark trigger, these follow into dark automatically —
+ * there is no separate `.dark` shadcn block to keep in step.
+ */
+:root {
+  --background: var(--g-bg);
+  --foreground: var(--g-ink);
+  --card: var(--g-surface);
+  --card-foreground: var(--g-ink);
+  --popover: var(--g-surface);
+  --popover-foreground: var(--g-ink);
+  --primary: var(--g-brand);
+  --primary-foreground: var(--g-brand-ink);
+  --secondary: var(--g-surface-2);
+  --secondary-foreground: var(--g-ink);
+  --muted: var(--g-surface-2);
+  --muted-foreground: var(--g-ink-3);
+  --accent: var(--g-surface-2);
+  --accent-foreground: var(--g-ink);
+  --destructive: var(--g-danger);
+  --destructive-foreground: #ffffff;
+  --border: var(--g-line);
+  --input: var(--g-line);
+  --ring: var(--g-brand);
+  /* The brand green leads the series, so a primary/first series reads as the
+     brand. The rest are the logo's other materials — water, brick, harvest —
+     kept far enough apart in hue to stay separable on a multi-series chart. */
+  --chart-1: var(--g-brand);
+  /* Aliases, not copies. These carried their own hexes and so did not follow
+     the palette when the ground was retuned to paper — the chart series kept
+     the old warm brick and harvest while every chip beside them moved. */
+  --chart-2: var(--g-water);
+  --chart-3: var(--g-brick);
+  --chart-4: var(--g-harvest);
+  --chart-5: #5C6B73;
+  --radius: 0.5rem;
+  --sidebar: var(--g-surface);
+  --sidebar-foreground: var(--g-ink);
+  --sidebar-primary: var(--g-brand);
+  --sidebar-primary-foreground: var(--g-brand-ink);
+  --sidebar-accent: var(--g-surface-2);
+  --sidebar-accent-foreground: var(--g-ink);
+  --sidebar-border: var(--g-line);
+  --sidebar-ring: var(--g-brand);
+}
+
+/* Hide scrollbar but keep scrolling */
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;     /* Firefox */
+}
+
+
+@theme inline {
+  /* Using system fonts instead of custom fonts for normal appearance */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Courier New", monospace;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Department plate                                                    */
+/* ------------------------------------------------------------------ */
+/*
+ * The icon plate for a department, shared by the sign-in portal and the
+ * Access Control list. Global rather than page-scoped because it is one
+ * component drawn on two pages; scoping it would mean the admin list quietly
+ * losing the styling the portal has.
+ *
+ * Every surface colour reads a custom property with a light-theme fallback, so
+ * the plate is correct on a page that knows nothing about the portal's theme
+ * and follows it exactly on one that does.
+ */
+.dept-plate {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  overflow: hidden;
+  background: var(--plate-bg, #fff);
+  /* One shadow, not two stacked. The contract asks for a single weight. */
+  box-shadow: 0 1px 2px var(--plate-shadow-1, rgba(15, 23, 42, 0.07));
+  transition: transform .22s cubic-bezier(.2, .8, .3, 1),
+              box-shadow .22s ease,
+              background-color .22s ease;
+}
+
+/* A flat wash of the department's own hue, so the colour reads from across the
+   room while the glyph stays legible. Flat, not a gradient: the portal's
+   direction contract refuses decorative gradients, and a tint that says "this
+   is the green one" needs no shading to do its job. */
+.dept-plate::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--plate-hue, #10b981) 11%, transparent);
+}
+
+.dept-plate.is-flat {
+  box-shadow: none;
+  background: color-mix(in srgb, var(--plate-hue, #10b981) 10%, transparent);
+}
+.dept-plate.is-flat::before { display: none; }
+
+/* Glyph only. No plate, no tint, no shadow — the icon is the icon. */
+.dept-plate.is-bare {
+  background: none;
+  box-shadow: none;
+  border-radius: 0;
+}
+.dept-plate.is-bare::before { display: none; }
+
+.dept-plate.is-muted {
+  background: var(--plate-bg-muted, #eef1f5);
+  box-shadow: none;
+}
+.dept-plate.is-muted::before { display: none; }
+
+.dept-plate-img { width: 100%; height: 100%; object-fit: cover; }
+.dept-plate-initials { position: relative; font-weight: 650; letter-spacing: -0.02em; }
+
+/* ================================================================== */
+/* Matrubhoomi theme tokens                                                   */
+/* ================================================================== */
+/*
+ * ONE set of tokens for the whole product, not a private set per screen.
+ *
+ * These started life scoped to the sign-in portal. They live here now because
+ * the portal, the login page, the home page and the department rail all have to
+ * look like the same product — which was the point of moving to a single theme.
+ * The eleven department dashboards still carry their own older styling; they get
+ * converted a piece at a time, and until then they simply do not read these.
+ *
+ * Everything is a custom property declared once per theme. The theme itself is
+ * set on <html data-mb-theme> by a blocking script in the root layout, before
+ * first paint.
+ */
+
+:root {
+  /* NATIVE CONTROLS FOLLOW THE THEME.
+   *
+   * A <select>'s drop-down list, the date picker's calendar, scrollbars and
+   * autofill highlights are drawn by the BROWSER, not by us — no class or
+   * custom property reaches inside them. `color-scheme` is the one hook that
+   * does, and without it those widgets are drawn light no matter what the page
+   * looks like. In dark mode that produced a white drop-down whose <option>
+   * text inherited our near-white ink: white on white, effectively unreadable.
+   *
+   * Declared per theme immediately below. Every native widget on every page
+   * depends on these two lines. */
+  color-scheme: light;
+
+  /* THE BRAND IS THE LOGO'S GREEN. THE GROUND IS PAPER.
+   *
+   * This used to be a warm cream ground, on the argument that it kept the green
+   * reading as foliage. It did — and it also gave every screen a faint yellow
+   * cast that read as an old interface rather than a current one, and it made
+   * white cards float on top of the page instead of sitting in it.
+   *
+   * So the ground is now a neutral near-white and the surfaces are pure white.
+   * The green is untouched: it is still the one accent, it still carries every
+   * primary action and every focus ring, and against a neutral ground it reads
+   * MORE like the logo's green, not less — there is no competing warmth for it
+   * to be measured against.
+   *
+   * Brick, water and harvest remain the logo's other materials, held back for
+   * accents, chart series and status. Nothing structural is ever painted in
+   * them. */
+  --g-brand: #1F6B33;
+  --g-brand-strong: #14471F;
+  --g-brand-ink: #ffffff;
+  --g-brand-wash: rgba(31, 107, 51, 0.08);
+
+  /* Secondary materials. Accents only — nothing structural is painted in them. */
+  --g-brick: #AC4F2C;
+  --g-brick-wash: rgba(172, 79, 44, 0.08);
+  --g-water: #2C7DA0;
+  --g-water-wash: rgba(44, 125, 160, 0.09);
+  /* Darkened from the logo's own harvest. The lighter value cleared 3:1 — fine
+     for a chart series, and NOT fine for the 11px status chips it also paints,
+     which need 4.5:1 as text. One value that satisfies both beats two that
+     drift. */
+  --g-harvest: #946A07;
+
+  /* Paper, and the ink on it. A 2-3% step between the ground and a card is all
+     the separation a hairline needs — anything more and the page starts looking
+     like a stack of tiles rather than one sheet. */
+  --g-bg: #F6F7F9;
+  --g-surface: #ffffff;
+  --g-surface-2: #F0F2F5;
+  --g-line: #E2E5EA;
+  --g-line-strong: #CBD1D8;
+
+  /* Neutral ink, very slightly cool. Pure #000 on white is harsher than any
+     printed page and is the fastest way to make a dense table tiring. */
+  --g-ink: #16191D;
+  --g-ink-2: #454B53;
+  --g-ink-3: #626A73;
+  /* 4.75:1 on white, 4.2:1 on the surface-2 wash. It paints 12px captions and
+     hints, so it is held to the small-text threshold rather than the large-text
+     one — a caption nobody can read is not a quieter caption. */
+  --g-ink-faint: #6B747E;
+
+  --g-danger: #B0392A;
+  --g-danger-wash: #FDF2F0;
+  --g-danger-edge: #F1CBC3;
+  --g-hint: #8A5A08;
+  --g-hint-wash: #FDF7E8;
+  --g-hint-edge: #EBDCA8;
+
+  --g-ring: 0 0 0 3px rgba(31, 107, 51, 0.20);
+  /* A whisper, and neutral. Depth here is border and ground contrast — see
+     DESIGN.md. A warm shadow on a neutral ground reads as a smudge. */
+  --g-shadow: 0 1px 2px rgba(16, 24, 32, 0.05), 0 4px 14px -8px rgba(16, 24, 32, 0.12);
+  --g-radius: 10px;
+  /* One source for the rail width: the shell, the sidebar offset and the
+     phone padding all read it, so the column can be retuned in one place. */
+  --g-rail-w: 64px;
+
+  /* Read by DepartmentIcon, which is drawn on several of these surfaces. */
+  --plate-bg: #ffffff;
+  --plate-bg-muted: #EDEFF2;
+  --plate-shadow-1: rgba(16, 24, 32, 0.07);
+}
+
+/* Two triggers, one dark palette. `data-mb-theme="dark"` is the product-wide
+   toggle (shared top bar, sign-in portal, rail, HR). `.dark` is the legacy class
+   some older layouts still toggle — pointing it at the same values means those
+   screens inherit this dark palette for free, and there is one dark theme to
+   maintain rather than two that drift. */
+:root[data-mb-theme="dark"],
+.dark {
+  /* See the note in :root — this is what makes the native <select> list, the
+     date picker and the scrollbars dark instead of white. */
+  color-scheme: dark;
+
+  /* Dark is not an inversion of light. The green LIFTS — #1F6B33 on a near
+     black ground is unreadable as a button fill — and everything else stays
+     NEUTRAL, matching the light theme's paper ground rather than tinting the
+     dark one green. A green-cast dark against a neutral-white light read as
+     two different products; the brand is carried by the accent in both. */
+  --g-brand: #4FBF6B;
+  --g-brand-strong: #85DA9A;
+  --g-brand-ink: #08210E;
+  --g-brand-wash: rgba(79, 191, 107, 0.13);
+
+  --g-brick: #D08055;
+  --g-brick-wash: rgba(208, 128, 85, 0.13);
+  --g-water: #64B6D8;
+  --g-water-wash: rgba(100, 182, 216, 0.13);
+  --g-harvest: #E7BE4E;
+
+  --g-bg: #0D1013;
+  --g-surface: #16191D;
+  --g-surface-2: #1C2026;
+  --g-line: #272C33;
+  --g-line-strong: #363D45;
+
+  --g-ink: #ECEFF3;
+  --g-ink-2: #B3BAC3;
+  --g-ink-3: #99A1AB;
+  --g-ink-faint: #828A94;
+
+  --g-danger: #F3A18C;
+  --g-danger-wash: rgba(176, 58, 32, 0.16);
+  --g-danger-edge: rgba(243, 161, 140, 0.26);
+  --g-hint: #E7BE4E;
+  --g-hint-wash: rgba(138, 90, 8, 0.18);
+  --g-hint-edge: rgba(231, 190, 78, 0.24);
+
+  --g-ring: 0 0 0 3px rgba(79, 191, 107, 0.26);
+  --g-shadow: 0 6px 22px -8px rgba(0, 0, 0, 0.7), 0 1px 3px rgba(0, 0, 0, 0.5);
+
+  --plate-bg: #1D2228;
+  --plate-bg-muted: #181C21;
+  --plate-shadow-1: rgba(0, 0, 0, 0.45);
+}
+
+/* ================================================================== */
+/* Glassmorphism system — colourful aurora ground + frosted glass      */
+/* ================================================================== */
+/*
+ * FLAT, LIGHTWEIGHT DIRECTION (2026-07-31).
+ *
+ * The glass/aurora world was dropped: backdrop-filter blur and multi-layer
+ * radial gradients are GPU-heavy (bad on low-end devices with no discrete GPU)
+ * and read poorly in dark. These token NAMES are kept so every consumer keeps
+ * working, but their VALUES are now flat — solid surfaces, a hairline border, a
+ * whisper of shadow, NO blur, and a flat emerald accent. Because the kit
+ * (lib/kitCss.js), the dashboard, employees, attendance, home and login all read
+ * these tokens, flattening them here flattens every one of those surfaces at
+ * once. This aligns the app to DESIGN.md's documented flat system.
+ *
+ *   --aurora      → the solid page ground
+ *   --glass-bg/-2 → the solid card surface (a gradient of one colour = flat)
+ *   --glass-blur  → `none`, so `backdrop-filter: var(--glass-blur)` is a no-op
+ *   --grad-accent → the flat brand colour (was a gradient)
+ */
+:root {
+  --aurora: var(--g-bg);
+  --glass-bg: var(--g-surface);
+  --glass-bg-2: var(--g-surface);
+  --glass-bd: var(--g-line);
+  --glass-hi: transparent;
+  --glass-shadow: 0 1px 2px rgba(16,24,40,.05);
+  --glass-blur: none;
+  --grad-accent: var(--g-brand);
+}
+:root[data-mb-theme="dark"], .dark {
+  --aurora: var(--g-bg);
+  --glass-bg: var(--g-surface);
+  --glass-bg-2: var(--g-surface);
+  --glass-bd: var(--g-line);
+  --glass-hi: transparent;
+  --glass-shadow: 0 1px 2px rgba(0,0,0,.35);
+  --glass-blur: none;
+  --grad-accent: var(--g-brand);
+}
+.g-glass {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-bd);
+  box-shadow: var(--glass-shadow);
+}
+/* The page itself carries the aurora, so the strip above the floating top bar
+   (and any uncovered edge) matches instead of flashing the plain body colour. */
+body { background: var(--aurora); background-attachment: fixed; }
+
+/* The <option> rows inside a native drop-down.
+ *
+ * `color-scheme: dark` on :root already tells the browser to paint the popup
+ * dark, but the OPTIONS still inherit `color` from the <select>, which our
+ * input styling sets to the near-white page ink. On Windows Chrome that lands
+ * near-white text on the popup's own surface. Pinning both to the system
+ * colours — which `color-scheme` has by then already resolved for the active
+ * theme — is what actually makes the list legible in both themes.
+ *
+ * Deliberately unscoped: every <select> in the app has this problem, and a
+ * per-component fix would leave the next one broken. */
+select option,
+select optgroup {
+  background-color: Field;
+  color: FieldText;
+}
+
+/* The department icon morphing from the onboarding card into the rail.
+   A cross-document view transition, so it survives the full page load the
+   session cookie requires — a client-side transition cannot be used here,
+   because the cookie is set on another origin and the route guard would
+   evaluate before the browser committed it. Browsers without support simply
+   navigate, which is the behaviour that existed before. */
+@view-transition { navigation: auto; }
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) { animation: none !important; }
+}
+
+.g-sans {
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ================================================================== */
+/* Application shell: the department rail                              */
+/* ================================================================== */
+/*
+ * In the shared sheet rather than injected by the components that use it.
+ * A style tag inside a component ships a fresh copy on every mount and cannot
+ * be inspected or tested on its own; the rail is part of the product's chrome,
+ * so it belongs with the rest of the chrome.
+ */
+
+.g-shell { display: flex; align-items: flex-start; min-height: 100dvh; }
+/* min-width:0 or a wide child (a table, a schedule grid) refuses to shrink and
+   pushes the rail off screen instead of scrolling itself. */
+.g-shell-body { flex: 1 1 auto; min-width: 0; }
+
+@media (max-width: 720px) {
+  .g-shell { display: block; }
+  /* Clear the rail once it has moved to the bottom edge. */
+  /* The rail is a horizontal strip now; its height is the icon + label + padding,
+     not the desktop column width. */
+  .g-shell-body { padding-bottom: calc(62px + env(safe-area-inset-bottom, 0px)); }
+  /* Routes that opt out of the rail entirely (AppShell's RAIL_HIDDEN_PATHS)
+     have nothing at the bottom edge to clear. */
+  .g-shell-body.g-shell-body--full { padding-bottom: 0; }
+}
+
+.g-rail {
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  height: 100dvh;
+  width: var(--g-rail-w);
+  flex: 0 0 var(--g-rail-w);
+  /* Above the department sidebars (z-50). When one of them slides shut it ends
+     with its right edge exactly on the rail's, and at a lower z-index the rail
+     was painted over by that sliver. */
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: .125rem;
+  padding: .5rem .375rem;
+  background: var(--g-surface);
+  border-right: 1px solid var(--g-line);
+}
+
+/* The wrapper animates the collapse (grid rows, not layout-thrashing max-height);
+   the inner list holds the flex column and scrolls. */
+.g-rail-list {
+  display: grid; grid-template-rows: 1fr; min-height: 0; overflow: hidden;
+}
+.g-rail-items {
+  display: flex; flex-direction: column; gap: .125rem;
+  list-style: none; margin: 0; padding: 0;
+  overflow-y: auto; overflow-x: hidden;
+  min-height: 0;
+  /* The scrollbar would eat four pixels of an eighty-pixel column. */
+  scrollbar-width: none;
+}
+.g-rail-items::-webkit-scrollbar { display: none; }
+
+.g-rail-foot {
+  margin-top: auto;
+  display: flex; flex-direction: column; gap: .125rem;
+  padding-top: .375rem;
+  border-top: 1px solid var(--g-line);
+}
+
+/* ── Rail logo: real Matrubhoomi mark (theme-aware) that drops the icons open/closed ── */
+.g-rail-logo {
+  display: grid; place-items: center; width: 100%;
+  padding: .35rem; margin-bottom: .4rem;
+  border: 0; border-radius: 10px; background: transparent; cursor: pointer;
+  transition: background-color .14s;
+}
+.g-rail-logo:hover { background: var(--g-surface-2); }
+.g-rail-logo:focus-visible { outline: 2px solid var(--g-brand); outline-offset: -2px; }
+.g-rail-logoimg { width: 34px; height: 34px; border-radius: 9px; display: block; object-fit: contain; }
+.logo-on-dark { display: none; }
+:root[data-mb-theme="dark"] .logo-on-light { display: none; }
+:root[data-mb-theme="dark"] .logo-on-dark { display: block; }
+
+/* Vertical collapse: the department list drops down from the logo, then folds
+   back up and hides — the rail width never changes. */
+.g-rail-list { transition: grid-template-rows .3s cubic-bezier(.4,0,.2,1), opacity .2s ease; }
+.g-rail:not(.is-expanded) .g-rail-list { grid-template-rows: 0fr; opacity: 0; pointer-events: none; }
+
+@media (max-width: 720px) {
+  /* On the bottom strip the list is always shown; the toggle is desktop-only. */
+  .g-rail-logo { display: none; }
+  .g-rail:not(.is-expanded) .g-rail-list { grid-template-rows: 1fr; opacity: 1; pointer-events: auto; }
+}
+
+/* Icon over label. Radius here EARNS it — this is the selected-state surface,
+   one of the few places in the product that gets a corner. */
+.g-rail-btn {
+  position: relative;
+  width: 100%;
+  display: flex; flex-direction: column; align-items: center; gap: .25rem;
+  padding: .4375rem .1875rem .375rem;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+  color: var(--g-ink-3);
+  text-decoration: none;
+  transition: background-color .14s, color .14s;
+}
+.g-rail-btn:hover:not(:disabled) { background: var(--g-surface-2); color: var(--g-ink); }
+.g-rail-btn:focus-visible { outline: 2px solid var(--g-brand); outline-offset: -2px; }
+.g-rail-btn:disabled { cursor: default; }
+.g-rail-btn.is-plain { color: var(--g-ink-faint); }
+
+/* Where you are. A filled block, not an edge sliver: with labels under every
+   icon the column is busy enough that a 3px tick disappears. */
+.g-rail-btn.is-active {
+  background: var(--g-brand-wash);
+  color: var(--g-brand);
+}
+.g-rail-btn.is-active .g-rail-name { color: var(--g-brand); font-weight: 640; }
+
+.g-rail-ico, .g-rail-glyph {
+  display: grid; place-items: center;
+  height: 18px;
+}
+.g-rail-name {
+  font-size: 9.75px;
+  line-height: 1.15;
+  text-align: center;
+  letter-spacing: -.005em;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.g-rail-busy {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--g-surface) 78%, transparent);
+  color: var(--g-brand);
+}
+.g-spin { animation: g-spin .9s linear infinite; }
+@keyframes g-spin { to { transform: rotate(360deg); } }
+
+.g-rail-error {
+  position: absolute; left: calc(100% + .5rem); bottom: .75rem;
+  width: max-content; max-width: 16rem;
+  padding: .4rem .6rem;
+  font-size: 12px;
+  color: var(--g-danger);
+  background: var(--g-danger-wash);
+  border: 1px solid var(--g-danger-edge);
+  border-radius: 8px;
+}
+
+/* On a phone the rail lies down along the bottom, which is where a thumb is.
+   A 60px column on a 390px screen costs more than it returns. */
+@media (max-width: 720px) {
+  .g-rail {
+    position: fixed; inset: auto 0 0 0;
+    height: auto; width: 100%; flex-basis: auto;
+    flex-direction: row; justify-content: flex-start;
+    gap: .25rem;
+    padding: .375rem .5rem calc(.375rem + env(safe-area-inset-bottom, 0px));
+    border-right: 0;
+    border-top: 1px solid var(--g-line);
+    background: var(--g-surface);
+    overflow-x: auto;
+  }
+  .g-rail-items { flex-direction: row; }
+  .g-rail-btn { width: 68px; flex: 0 0 68px; }
+  .g-rail-foot {
+    margin-top: 0; flex-direction: row;
+    border-top: 0; border-left: 1px solid var(--g-line);
+    padding-top: 0; padding-left: .375rem; margin-left: .25rem;
+  }
+
+  .g-rail-error { left: .75rem; right: .75rem; bottom: calc(100% + .5rem); max-width: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .g-rail-btn { transition: none; }
+}
+
+/* ------------------------------------------------------------------ */
+/* Department sidebars beside the rail, not under it                   */
+/* ------------------------------------------------------------------ */
+/*
+ * Every department layout pins its own sidebar with `fixed top-0 left-0 z-50`.
+ * A fixed element is positioned against the VIEWPORT, not against the flex
+ * parent — so inside the shell it still starts at x=0 and covers the rail
+ * completely. That is why opening a department looked like the rail vanished.
+ *
+ * Offsetting them here rather than editing eleven layouts: this is a fact about
+ * the shell, and a shell that only works when every page remembers to account
+ * for it is a shell that will be wrong the first time somebody adds a twelfth.
+ * Their main content already uses margins measured from the shell body, which
+ * the flex row has offset for them, so only the fixed layer needs moving.
+ */
+/* Any department sidebar, however it is classed.
+   This used to match only `aside.fixed`, i.e. the Tailwind class. Rewriting
+   HR's sidebar replaced that class with `hr-nav`, the rule silently stopped
+   matching, and the panel slid back under the rail — which clipped the first
+   sixty-four pixels of every label in it. Matching the component class too,
+   rather than relying on a utility class nobody promised to keep. */
+.g-shell-body aside.fixed,
+.g-shell-body .hr-nav,
+.g-shell-body > aside[class*="fixed"] {
+  left: var(--g-rail-w, 60px);
+}
+
+/* The scrim behind a mobile drawer still covers everything, deliberately —
+   including the rail, because the drawer is modal while it is open. */
+.g-shell-body .fixed.inset-0 { left: 0; }
+
+@media (max-width: 720px) {
+  /* The rail has moved to the bottom edge, so the left edge is free again. */
+  .g-shell-body aside.fixed,
+  .g-shell-body .hr-nav,
+  .g-shell-body > aside[class*="fixed"] { left: 0; }
+}
+
+/* ------------------------------------------------------------------ */
+/* Opening a department: a lateral move, not a cut                     */
+/* ------------------------------------------------------------------ */
+/*
+ * Choosing an application is a real navigation — the session cookie is set on
+ * another origin and carries one department, so a client-side transition would
+ * reach the next route's guard before the browser committed it. What a
+ * cross-document view transition buys is that the necessary page load reads as
+ * the launcher sliding aside and the department arriving in its place, with the
+ * department's own icon carried across into the rail rather than redrawn.
+ */
+::view-transition-old(root) {
+  animation: g-slide-out .26s cubic-bezier(.4, 0, .2, 1) both;
+}
+::view-transition-new(root) {
+  animation: g-slide-in .3s cubic-bezier(.16, 1, .3, 1) both;
+}
+@keyframes g-slide-out {
+  to { transform: translateX(-3%); opacity: 0; }
+}
+@keyframes g-slide-in {
+  from { transform: translateX(4%); opacity: 0; }
+}
+
+/* The icon itself is a shared element: it travels from its card to its slot in
+   the rail. Slower than the page beneath it, so the eye follows the icon and
+   reads the two screens as one place. */
+::view-transition-group(*) {
+  animation-duration: .34s;
+  animation-timing-function: cubic-bezier(.16, 1, .3, 1);
+}
+
+/* The content beside the rail, arriving. Keyed on the route in AppShell, so it
+   replays on every department switch — the department moves in from the side
+   the launcher left towards, which is what makes a swap read as one place
+   rather than two pages.
+
+   Transform and opacity only, and NO fill mode: an entrance that cannot run
+   must never be able to leave the application invisible. */
+@media (prefers-reduced-motion: no-preference) {
+  .g-enter { animation: g-enter .24s ease-out; }
+}
+/*
+ * OPACITY ONLY — deliberately, and this is not a stylistic choice.
+ *
+ * An animated `transform` makes the element a containing block for any
+ * `position: fixed` descendant. Every department layout pins its sidebar that
+ * way, so a translate here re-anchored those sidebars to this element for the
+ * duration of the animation and then snapped them back to the viewport when it
+ * ended — a visible jump on every switch. Measured: the sidebar landed at 114px
+ * instead of the rail's 52px while the animation ran.
+ *
+ * The lateral movement lives on the rail-to-card icon morph instead, where
+ * nothing is fixed inside the animating element.
+ */
+@keyframes g-enter {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Shared top bar                                                      */
+/* ------------------------------------------------------------------ */
+/*
+ * One bar above every department, so the chrome never changes and only the
+ * content does. Radius appears here in three places only — the account pill,
+ * its menu, and the icon buttons — because a bar with a rounded everything
+ * reads as a toolbar of separate widgets rather than one surface.
+ */
+.gt {
+  position: sticky; top: 12px; z-index: 30;
+  display: flex; align-items: center; gap: .75rem;
+  min-height: 54px;
+  margin: 12px clamp(12px, 3vw, 20px) 6px;
+  padding-inline: clamp(.6rem, 2vw, 1rem);
+  border-radius: 18px;
+  background: linear-gradient(160deg, var(--glass-bg), var(--glass-bg-2));
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-bd);
+  box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  color: var(--g-ink);
+}
+.gt-left { display: flex; align-items: center; gap: .625rem; min-width: 0; }
+.gt-mid { flex: 1; display: flex; align-items: center; justify-content: flex-end; gap: .5rem; min-width: 0; }
+.gt-right { display: flex; align-items: center; gap: .5rem; margin-left: auto; }
+.gt-mid ~ .gt-right { margin-left: 0; }
+
+.gt-brand { display: flex; align-items: center; gap: .5rem; text-decoration: none; color: inherit; min-width: 0; }
+.gt-mark {
+  width: 30px; height: 30px; border-radius: 8px;
+  display: grid; place-items: center;
+  background: var(--g-brand); color: var(--g-brand-ink);
+  font-weight: 700; font-size: 14px; letter-spacing: -.02em; flex-shrink: 0;
+}
+.gt-brand-text { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
+.gt-brand-name { font-size: 13px; font-weight: 620; letter-spacing: -.011em; }
+.gt-brand-sub { font-size: 11.5px; color: var(--g-ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.gt-icon {
+  width: 34px; height: 34px; flex-shrink: 0;
+  display: grid; place-items: center;
+  border: 1px solid var(--g-line); border-radius: 8px;
+  background: var(--g-surface); color: var(--g-ink-2);
+  cursor: pointer; transition: border-color .15s, color .15s;
+}
+.gt-icon:hover { border-color: var(--g-line-strong); color: var(--g-ink); }
+.gt-icon:focus-visible { outline: 2px solid var(--g-brand); outline-offset: 2px; }
+
+.gt-acct { position: relative; }
+.gt-acct-btn {
+  display: flex; align-items: center; gap: .45rem;
+  height: 34px; padding: 0 .55rem 0 .2rem;
+  border: 1px solid var(--g-line); border-radius: 999px;
+  background: var(--g-surface); color: var(--g-ink);
+  font: inherit; font-size: 12.5px; cursor: pointer;
+  transition: border-color .15s;
+}
+.gt-acct-btn:hover { border-color: var(--g-line-strong); }
+.gt-acct-btn:focus-visible { outline: 2px solid var(--g-brand); outline-offset: 2px; }
+.gt-avatar {
+  width: 26px; height: 26px; border-radius: 999px;
+  display: grid; place-items: center;
+  background: var(--g-brand-wash); color: var(--g-brand);
+  font-size: 10.5px; font-weight: 680; flex-shrink: 0;
+}
+.gt-acct-name { max-width: 12ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gt-chev { color: var(--g-ink-3); flex-shrink: 0; transition: transform .18s ease; }
+.gt-chev.is-open { transform: rotate(180deg); }
+
+.gt-menu {
+  position: absolute; right: 0; top: calc(100% + .5rem);
+  width: 17rem; z-index: 60;
+  background: var(--g-surface);
+  border: 1px solid var(--g-line); border-radius: 10px;
+  box-shadow: var(--g-shadow);
+  padding: .375rem;
+}
+.gt-menu-head { padding: .5rem .625rem .625rem; border-bottom: 1px solid var(--g-line); margin-bottom: .375rem; }
+.gt-menu-name { display: block; font-size: 13px; font-weight: 580; }
+.gt-menu-mail { display: block; font-size: 11.5px; color: var(--g-ink-3); overflow: hidden; text-overflow: ellipsis; }
+.gt-tag {
+  display: inline-flex; align-items: center; gap: .25rem; margin-top: .4rem;
+  font-size: 10.5px; font-weight: 620; color: var(--g-brand);
+  background: var(--g-brand-wash); border-radius: 5px; padding: .1rem .35rem;
+}
+.gt-item {
+  width: 100%;
+  display: flex; align-items: center; justify-content: space-between; gap: .5rem;
+  padding: .5rem .625rem; border: 0; border-radius: 7px;
+  background: transparent; color: var(--g-ink-2);
+  font: inherit; font-size: 13px; cursor: pointer; text-align: left; text-decoration: none;
+  transition: background-color .12s, color .12s;
+}
+.gt-item:hover { background: var(--g-surface-2); color: var(--g-ink); }
+.gt-item:focus-visible { outline: 2px solid var(--g-brand); outline-offset: -2px; }
+.gt-item.is-danger { justify-content: flex-start; gap: .45rem; color: var(--g-danger); }
+.gt-panel { padding: .25rem .375rem .5rem; }
+
+@media (max-width: 640px) {
+  .gt-acct-name, .gt-brand-name { display: none; }
+  .gt-menu { width: min(17rem, calc(100vw - 1.5rem)); }
+}
+@media (pointer: coarse) {
+  .gt-icon { width: 40px; height: 40px; }
+  .gt-acct-btn { height: 40px; }
+  .gt-item { padding-block: .7rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gt-icon, .gt-acct-btn, .gt-chev, .gt-item { transition: none; }
+}
+
+/* A department sidebar that slides out to a negative offset must not extend the
+   scrollable area — that horizontal scroll is what pushed the rail off the edge
+   and cut it in half when the sidebar was closed. */
+.g-shell { overflow-x: clip; }
+
+/* ------------------------------------------------------------------ */
+/* HR shell: the department's own sidebar                              */
+/* ------------------------------------------------------------------ */
+/*
+ * In the shared sheet, not injected by the layout. A style tag inside a
+ * component ships a fresh copy on every mount and — the reason it moved — can
+ * only be inspected on a page where that component happens to be mounted, so
+ * the sidebar could not be checked from the design preview at all.
+ */
+
+.hr-shell { background: var(--g-bg); }
+
+/* ── Sidebar ───────────────────────────────────────────────────────
+   Rebuilt on the shared tokens. What changed and why:
+
+   - 12px rows instead of 12px+padding pills. Eleven items at py-3 with a
+     rounded background each read as eleven buttons stacked in a box; the list
+     is a list, so only the ACTIVE row gets a surface.
+   - The brand block is gone from the top. It is in the shared bar two
+     centimetres above, and repeating it cost 64px before the first link.
+   - The account block and Logout are gone from the bottom, for the same
+     reason: both are in the bar, and two sign-outs is two things to keep in
+     step.
+   - Emerald, not purple. Purple was this one screen's idea. */
+
+.hr-nav {
+  position: fixed; top: 0; height: 100%;
+  /* Starts where the rail ends.
+     This used to be handled by a generic `.g-shell-body aside.fixed` rule, and
+     renaming this element to .hr-nav silently stopped that rule matching — so
+     the sidebar sat at x=0 underneath the rail and its labels were clipped
+     ("RESOURCES" instead of "HUMAN RESOURCES"). Owning the offset here means it
+     cannot be lost to a future rename. */
+  left: var(--g-rail-w);
+  width: 15rem; z-index: 50;
+  background: var(--g-surface);
+  border-right: 1px solid var(--g-line);
+  transform: translateX(-100%);
+  transition: transform .28s cubic-bezier(.4, 0, .2, 1);
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+.hr-nav.is-open { transform: translateX(0); }
+
+.hr-nav-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: .5rem; height: 56px; padding-inline: .875rem .625rem;
+  border-bottom: 1px solid var(--g-line);
+}
+.hr-nav-eyebrow {
+  font-size: 11px; font-weight: 640; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--g-ink-faint);
+}
+.hr-nav-close {
+  width: 28px; height: 28px; display: grid; place-items: center;
+  border: 0; border-radius: 6px; background: transparent;
+  color: var(--g-ink-3); cursor: pointer;
+}
+.hr-nav-close:hover { background: var(--g-surface-2); color: var(--g-ink); }
+.hr-nav-close:focus-visible { outline: 2px solid var(--g-brand); outline-offset: 1px; }
+
+.hr-nav-scroll { flex: 1; overflow-y: auto; padding: .5rem .5rem 1rem; min-height: 0; }
+.hr-nav-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+
+.hr-nav-item {
+  width: 100%;
+  display: flex; align-items: center; gap: .625rem;
+  padding: .4375rem .625rem;
+  border: 0; border-radius: 7px;
+  background: transparent; color: var(--g-ink-2);
+  font: inherit; font-size: 13px; text-align: left; text-decoration: none;
+  cursor: pointer;
+  transition: background-color .13s, color .13s;
+}
+.hr-nav-item:hover { background: var(--g-surface-2); color: var(--g-ink); }
+.hr-nav-item:focus-visible { outline: 2px solid var(--g-brand); outline-offset: -2px; }
+
+/* Only the current page gets a surface. */
+.hr-nav-item.is-active {
+  background: var(--g-brand-wash);
+  color: var(--g-brand);
+  font-weight: 580;
+}
+.hr-nav-item.is-off { color: var(--g-ink-faint); cursor: not-allowed; }
+.hr-nav-item.is-sub { padding-left: .5rem; font-size: 12.5px; }
+
+.hr-nav-ico { width: 16px; height: 16px; flex-shrink: 0; }
+.hr-nav-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hr-nav-chev { width: 14px; height: 14px; flex-shrink: 0; opacity: .6; }
+
+.hr-nav-sub {
+  list-style: none; margin: 1px 0 1px .9375rem; padding: 0 0 0 .625rem;
+  border-left: 1px solid var(--g-line);
+  display: flex; flex-direction: column; gap: 1px;
+}
+
+.hr-nav-badge {
+  font-size: 9px; font-weight: 700; letter-spacing: .04em;
+  padding: .05rem .3rem; border-radius: 4px;
+  background: var(--g-brand-wash); color: var(--g-brand);
+  flex-shrink: 0;
+}
+
+@media (max-width: 720px) {
+  /* The rail has moved to the bottom edge, so the left edge is free again. */
+  .hr-nav { left: 0; }
+}
+
+@media (pointer: coarse) {
+  .hr-nav-item { padding-block: .625rem; }
+  .hr-nav-close { width: 36px; height: 36px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hr-nav { transition: none; }
+  .hr-nav-item { transition: none; }
+}
+
+.hr-bar-icon {
+  position: relative;
+  width: 34px; height: 34px; flex-shrink: 0;
+  display: grid; place-items: center;
+  border: 1px solid var(--g-line); border-radius: 8px;
+  background: var(--g-surface); color: var(--g-ink-2);
+  cursor: pointer; transition: border-color .15s, color .15s;
+}
+.hr-bar-icon:hover { border-color: var(--g-line-strong); color: var(--g-ink); }
+.hr-bar-icon:focus-visible { outline: 2px solid var(--g-brand); outline-offset: 2px; }
+.hr-bar-dot {
+  position: absolute; top: 6px; right: 6px;
+  width: 6px; height: 6px; border-radius: 999px;
+}
+.hr-bar-dot.is-info { background: #3b82f6; }
+.hr-bar-dot.is-alert { background: var(--g-danger); }
+
+@media (max-width: 900px) { .hr-bar-icon { display: none; } }
+@media (pointer: coarse) { .hr-bar-icon { width: 40px; height: 40px; } }
+
+/* ------------------------------------------------------------------ */
+/* Futuristic neon skin: HR sidebar + ground                           */
+/* ------------------------------------------------------------------ */
+/*
+ * Layered after the base .hr-nav/.hr-shell rules so it wins at equal
+ * specificity. Same language as the dashboard sheet: lit gradient panels, a
+ * tinted 1px edge, and a neon-emerald active marker with a soft glow — no
+ * backdrop-filter. Both themes carry it; dark leans into the neon.
+ */
+:root[data-mb-theme="light"] .hr-nav {
+  --nxs-p1: rgba(255,255,255,.74); --nxs-p2: rgba(255,255,255,.52); --nxs-bd: rgba(17,24,39,.07);
+  --nxs-accent: #0f9d70; --nxs-soft: rgba(15,157,112,.12);
+  --nxs-hi: rgba(255,255,255,.9); --nxs-glow: none; --nxs-ink: #4a5560;
+}
+:root[data-mb-theme="dark"] .hr-nav {
+  --nxs-p1: rgba(255,255,255,.05); --nxs-p2: rgba(255,255,255,.02); --nxs-bd: rgba(255,255,255,.08);
+  --nxs-accent: #56e0b4; --nxs-soft: rgba(86,224,180,.14);
+  --nxs-hi: rgba(255,255,255,.06); --nxs-glow: none; --nxs-ink: #aebdc3;
+}
+
+.hr-nav {
+  background: linear-gradient(180deg, var(--nxs-p1, var(--g-surface)), var(--nxs-p2, var(--g-surface)));
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border-right-color: var(--nxs-bd, var(--g-line));
+  box-shadow: inset -1px 0 0 var(--nxs-hi, transparent);
+}
+.hr-nav-head { border-bottom-color: var(--nxs-bd, var(--g-line)); }
+.hr-nav-eyebrow { color: var(--nxs-accent, var(--g-ink-faint)); letter-spacing: .12em; }
+.hr-nav-item { color: var(--nxs-ink, var(--g-ink-2)); }
+.hr-nav-item:hover { background: var(--nxs-soft, var(--g-surface-2)); color: var(--nxs-accent, var(--g-ink)); }
+.hr-nav-item.is-active {
+  position: relative;
+  background: var(--nxs-soft, var(--g-brand-wash));
+  color: var(--nxs-accent, var(--g-brand));
+}
+.hr-nav-item.is-active::before {
+  content: ""; position: absolute; left: 0; top: 6px; bottom: 6px;
+  width: 2px; border-radius: 2px;
+  background: var(--nxs-accent, var(--g-brand)); box-shadow: var(--nxs-glow, none);
+}
+.hr-nav-item.is-active .hr-nav-text { color: var(--nxs-accent, var(--g-brand)); }
+.hr-nav-item.is-active .hr-nav-ico { color: var(--nxs-accent, var(--g-brand)); }
+.hr-nav-sub { border-left-color: var(--nxs-bd, var(--g-line)); }
+.hr-nav-badge { background: var(--nxs-soft, var(--g-brand-wash)); color: var(--nxs-accent, var(--g-brand)); }
+
+/* The ambient aurora ground the cards and sidebar float on. Soft, multi-hue,
+   low-opacity radial washes over a deep (dark) or warm-light base — the premium
+   "glassy" feel comes from this bleeding through the translucent cards, with no
+   backdrop-filter anywhere. `.hr-ground` is the same field for the design
+   preview, which has no shell. */
+.hr-shell, .hr-ground { background: var(--aurora); background-attachment: fixed; }
+
+/* ------------------------------------------------------------------ */
+/* Merged top-bar section nav (AppTopBar nav mode) — one bar for all    */
+/* departments: brand · scrollable section nav · controls · account.    */
+/* ------------------------------------------------------------------ */
+.gt.has-nav { gap: .6rem; padding-left: 12px; padding-right: 8px; }
+/* Single profile icon — no name, no chevron. */
+.gt-acct-btn.is-compact { padding: 0; width: 36px; height: 36px; border-radius: 999px; justify-content: center; }
+.gt-acct-btn.is-compact .gt-avatar { width: 30px; height: 30px; }
+.gt-nav { flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.gt-nav::-webkit-scrollbar { display: none; }
+.gt-nav ul { display: flex; align-items: center; gap: 2px; list-style: none; margin: 0; padding: 0; min-width: max-content; }
+.gt-navitem {
+  display: inline-flex; align-items: center; gap: .4rem;
+  padding: .5rem .72rem; border-radius: 11px;
+  font-size: 13px; font-weight: 540; color: var(--g-ink-3); text-decoration: none; white-space: nowrap;
+  transition: background-color .13s, color .13s;
+}
+.gt-navitem:hover { background: var(--g-surface-2); color: var(--g-ink); }
+.gt-navitem.is-active { background: #18181d; color: #fff; font-weight: 560; }
+:root[data-mb-theme="dark"] .gt-navitem.is-active { background: #f1f1f4; color: #16161a; }
+.gt-navico { flex-shrink: 0; }
+.gt-navbadge {
+  font-size: 9px; font-weight: 700; letter-spacing: .03em; padding: .05rem .32rem;
+  border-radius: 5px; background: var(--g-surface-2); border: 1px solid var(--g-line); color: var(--g-ink-3);
+}
+.gt-navitem.is-active .gt-navbadge { background: rgba(255,255,255,.2); border-color: transparent; color: inherit; }
+.gt-burger { display: none; }
+.gt.has-nav .gt-right { flex-shrink: 0; }
+
+/* Content padding for the top-nav layout (was the sidebar-offset main). */
+.hr-main { padding: clamp(1rem, 2.5vw, 1.75rem) clamp(12px, 3vw, 20px) 2.5rem; }
+
+/* Tablet / mobile: the section nav collapses behind the menu button into a
+   dropdown sheet anchored under the bar. */
+@media (max-width: 960px) {
+  .gt.has-nav .gt-burger {
+    display: grid; place-items: center; width: 36px; height: 36px; flex-shrink: 0;
+    border: 1px solid var(--g-line); border-radius: 10px;
+    background: var(--g-surface); color: var(--g-ink-2); cursor: pointer;
+  }
+  .gt.has-nav .gt-burger:hover { border-color: var(--g-line-strong); color: var(--g-ink); }
+  .gt.has-nav .gt-nav {
+    position: absolute; left: 0; right: 0; top: calc(100% + 8px);
+    flex: none; overflow-y: auto; max-height: 72vh;
+    /* SOLID, not translucent — a see-through dropdown let the list bleed through
+       and read as "overlapping" the content. */
+    background: var(--g-surface);
+    border: 1px solid var(--g-line-strong); border-radius: 16px;
+    box-shadow: 0 24px 60px -20px rgba(0,0,0,.5);
+    padding: 8px; display: none;
+  }
+  .gt.has-nav .gt-nav.is-open { display: block; }
+  .gt.has-nav .gt-nav ul { flex-direction: column; align-items: stretch; gap: 2px; min-width: 0; }
+  .gt.has-nav .gt-navitem { width: 100%; padding: .65rem .7rem; }
+}
+@media (max-width: 640px) {
+  .gt.has-nav .gt-brand-sub { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { .gt-navitem { transition: none; } }
+/* The shared page kit (.gk-*) lives in lib/kitCss.js, injected as a <style> by
+   the dashboard layout — see that file for why it is not here. */
+
+
+/* ═══════════════════════════════════════════════════════════════════════
+   PRINT
+   ─────────────────────────────────────────────────────────────────────
+   Every print path in the app is a plain window.print() on the live page
+   (voucher view, ledger, the report pages, e-way bill preview, …). Without
+   these rules the browser lays out the whole application — department rail,
+   sidebar, top bar, floating assistant — and the document itself lands
+   squeezed into whatever column is left. That's the "it prints the page,
+   not the voucher" complaint.
+
+   The document is whatever is left after the chrome is removed, so mark
+   app furniture with `print:hidden` (Tailwind) or `data-print-hide` and it
+   drops out here. Anything pinned to the viewport is chrome by definition.
+   ═══════════════════════════════════════════════════════════════════════ */
+@media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+
+  html,
+  body {
+    background: #fff !important;
+    /* Undo the app shell's viewport sizing so content can flow across pages
+       instead of being clipped to one screen height. */
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+
+  /* App furniture — never part of a printed document. */
+  [data-print-hide],
+  .g-rail,
+  .matrubhoomi-ai-overlay,
+  .matrubhoomi-ai-voice {
+    display: none !important;
+  }
+
+  /* Viewport-pinned elements (toasts, overlays, floating buttons) are chrome
+     by construction; a printed sheet has no viewport to pin to. */
+  .fixed {
+    display: none !important;
+  }
+
+  /* Sticky headers/sidebars must not reserve a column or repeat per page. */
+  .sticky {
+    position: static !important;
+  }
+
+  /* Scroll containers clip content at one screen height when printed. */
+  .overflow-auto,
+  .overflow-y-auto,
+  .overflow-x-auto,
+  .overflow-hidden,
+  .overflow-x-hidden {
+    overflow: visible !important;
+  }
+
+  /* Flatten the shell's full-height flex layout so the document is the page. */
+  .min-h-screen,
+  .h-screen {
+    min-height: 0 !important;
+    height: auto !important;
+  }
+
+  /* Keep ink on paper: force backgrounds/colours the design relies on
+     (status pills, dark voucher headers, striped tables) to actually print. */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Shadows render as muddy grey boxes on most printers. */
+  * {
+    box-shadow: none !important;
+  }
+}

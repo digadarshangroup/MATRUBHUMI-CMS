@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Kept in step with app/globals.css on the web side: the paper ground and
+         the field green. Two values only — everything else lives in Compose. -->
+    <color name="ground">#F6F7F9</color>
+    <color name="brand">#1F6B33</color>
+    <!-- The plate behind the launcher emblem.
+         Sampled from the ivory disc INSIDE the logo itself, so the adaptive
+         icon's background and the artwork's own ground are the same colour and
+         the icon reads as one object rather than a sticker on a card. -->
+    <color name="icon_background">#F0EADE</color>
+</resources>

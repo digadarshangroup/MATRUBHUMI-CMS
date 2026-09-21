@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The company emblem, on the ivory it already sits on.
+
+  The source artwork ships with a cream ground baked in — which is what made it
+  show as a SQUARE inside every circular avatar and launcher mask. That ground
+  is flood-filled away at build time (see the generator), leaving a transparent
+  emblem, and the background layer below is the same ivory sampled from the
+  disc inside the logo. Artwork and plate are one object again, and the mask
+  now cuts a circle out of a circle instead of a square.
+
+  The foreground is drawn at 72% of the canvas. Only the middle 66% of an
+  adaptive icon is guaranteed to survive every launcher shape, and the emblem
+  is circular, so it tolerates a larger fraction than a square logo would —
+  large enough to fill the icon, small enough that the gear teeth never clip.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/icon_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+    <monochrome android:drawable="@mipmap/ic_launcher_foreground" />
+</adaptive-icon>

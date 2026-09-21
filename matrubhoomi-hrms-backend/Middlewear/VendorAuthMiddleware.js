@@ -1,0 +1,68 @@
+// middleware/VendorAuthMiddleware.js
+const jwt = require("jsonwebtoken");
+const { verifyToken } = require("../config/jwt");
+
+const VendorAuthMiddleware = (req, res, next) => {
+  try {
+    // 🔐 Read token from cookie
+    const token = req.cookies.vendor_token;
+
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        message: "Vendor authentication required",
+      });
+    }
+
+    // Verify token
+    const decoded = verifyToken(token);
+
+    // Check if it's a vendor token
+    if (decoded.role !== "vendor") {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Vendor access only.",
+      });
+    }
+
+    // Attach vendor info to request
+    req.vendor = {
+      id: decoded.id,
+      _id: decoded.id,
+      vendorCode: decoded.vendorCode,
+      email: decoded.email,
+      role: decoded.role,
+    };
+
+    next();
+  } catch (error) {
+    console.error("Vendor auth middleware error:", error);
+
+    if (error.name === "TokenExpiredError") {
+      return res.status(401).json({
+        success: false,
+        message: "Session expired. Please login again.",
+      });
+    }
+
+    if (error.name === "JsonWebTokenError") {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid authentication token",
+      });
+    }
+
+    return res.status(401).json({
+      success: false,
+      message: "Vendor authentication failed",
+    });
+  }
+};
+
+module.exports = VendorAuthMiddleware;
+
+
+
+// Ok Excellent, now let's move to another topic ok where this scan will happen ...
+
+// 

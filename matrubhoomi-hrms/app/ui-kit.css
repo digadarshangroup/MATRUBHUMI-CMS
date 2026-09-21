@@ -1,0 +1,1362 @@
+/* ─────────────────────────────────────────────────────────────
+   The measurement kit — the surface language the attendance,
+   department and roster screens are built on.
+
+   Everything the kit would put on `:root` is scoped here to
+   `.mb-ui`, because the rest of the app runs on the flat `--g-*`
+   system in globals.css and must not move when this changes.
+   The `@theme` block stays global — it only declares utility
+   NAMES (text-ink, rounded-card, border-hairline…) whose values
+   resolve from the variables inherited at the use site, so those
+   utilities only mean anything inside `.mb-ui`.
+
+   THREE MATERIALS, in depth order:
+     field  → the iridescent back layer, moves at rest
+     frost  → blurred translucent decks and panels
+     slab   → the opaque measurement surface
+
+   TWO THEMES, SEPARATELY TUNED. Dark is not an inversion: the
+   materials keep their ORDER but each gets its own values.
+   ───────────────────────────────────────────────────────────── */
+
+@theme {
+  /* Non-colour tokens are shared across both themes.
+     NOTE: the kit's `--font-sans` override is deliberately NOT copied — it
+     would retarget the global `font-sans` utility for every other department. */
+
+  --radius-slab: 28px;
+  --radius-panel: 22px;
+  --radius-inset: 14px;
+  /* Cards sit a step tighter than a hero slab and a step softer than an inset. */
+  --radius-card: 18px;
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-deck: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* 1180px in rem ON PURPOSE — Tailwind cannot sort a px value against the
+     built-in rem scale, and a mis-sorted variant resolves before `sm`. */
+  --breakpoint-deck: 73.75rem;
+
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-ink-faint: var(--ink-faint);
+
+  --color-slab: var(--slab);
+  --color-slab-ink: var(--slab-ink);
+  --color-slab-ink-muted: var(--slab-ink-muted);
+  --color-slab-screen: var(--slab-screen);
+
+  --color-frost-bar: var(--frost-bar);
+  --color-frost-panel: var(--frost-panel);
+  --color-hairline: var(--hairline);
+  --color-hairline-slab: var(--hairline-slab);
+
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-control: var(--control);
+  --color-control-hover: var(--control-hover);
+  --color-control-active: var(--control-active);
+
+  --color-c1: var(--c1);
+  --color-c2: var(--c2);
+  --color-c3: var(--c3);
+  --color-c4: var(--c4);
+
+  /* The field's six hues are theme-independent: the field's own tokens (base,
+     saturation, blob opacity) do the dark-mode work, so it stays recognisably
+     the same material in both themes.
+
+     They are the logo read as a gradient — cream paper, harvest yellow, brick,
+     water, foliage, and the deep green everything sits on. Deliberately
+     desaturated from the mark itself: this is the ground BEHIND the work, and
+     a ground that competes with a roster is a ground nobody can read. */
+  /* The field's hues, cooled to match the paper ground. They are only ever
+     seen at ~16% opacity in the gutters, so these are a tint on white rather
+     than colours in their own right. */
+  --color-field-ivory: #EEF1F4;
+  --color-field-gold: #DCD9C8;
+  --color-field-rose: #CBB3AC;
+  --color-field-mauve: #9EB3AE;
+  --color-field-slate: #93AEBE;
+  --color-field-deep: #3F4A52;
+
+  --color-state-risk: var(--state-risk);
+  --color-state-rework: var(--state-rework);
+  --color-state-extension: var(--state-extension);
+  --color-state-blocked: var(--state-blocked);
+  --color-state-overdue: var(--state-overdue);
+  --color-state-positive: var(--state-positive);
+
+  --shadow-deck-seat: var(--deck-seat);
+}
+
+/* ── LIGHT ──────────────────────────────────────────────────────
+   Daylight: a controlled off-white rather than a pure white canvas,
+   real separation between panels, text set against the frosted
+   composite rather than the flat token.                           */
+.mb-ui {
+  /* ── The @theme aliases, re-declared here ────────────────────────────────
+     `@theme` emits `--color-ink: var(--ink)` (and friends) onto `:root`. A
+     custom property is substituted where it is DECLARED, not where it is used —
+     so at `:root`, where `--ink` does not exist, every one of those aliases
+     computes to the guaranteed-invalid value and then INHERITS that down. The
+     kit does not hit this because it defines everything on `:root` together;
+     scoping the palette to `.mb-ui` splits the pair.
+     Re-declaring the aliases on the same element that owns the palette makes
+     them resolve here, and the dark block only has to override the palette
+     half — these follow automatically. */
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-ink-faint: var(--ink-faint);
+  --color-slab: var(--slab);
+  --color-slab-ink: var(--slab-ink);
+  --color-slab-ink-muted: var(--slab-ink-muted);
+  --color-slab-screen: var(--slab-screen);
+  --color-frost-bar: var(--frost-bar);
+  --color-frost-panel: var(--frost-panel);
+  --color-hairline: var(--hairline);
+  --color-hairline-slab: var(--hairline-slab);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-control: var(--control);
+  --color-control-hover: var(--control-hover);
+  --color-control-active: var(--control-active);
+  --color-c1: var(--c1);
+  --color-c2: var(--c2);
+  --color-c3: var(--c3);
+  --color-c4: var(--c4);
+  --color-state-risk: var(--state-risk);
+  --color-state-rework: var(--state-rework);
+  --color-state-extension: var(--state-extension);
+  --color-state-blocked: var(--state-blocked);
+  --color-state-overdue: var(--state-overdue);
+  --color-state-positive: var(--state-positive);
+  --shadow-deck-seat: var(--deck-seat);
+
+  --ink: #16191D;
+  --ink-muted: #4B525A;
+  --ink-faint: #626A73;   /* 5.5:1 on white — the kit's captions run smaller still */
+
+  /* The slab is the one surface that inverts. Neutral graphite rather than the
+     green-black it used to be: the ground below it is now paper, and a
+     green-black slab on a neutral page reads as a different product's
+     component that wandered in. */
+  --slab: #1D2228;
+  --slab-ink: #F4F6F8;
+  --slab-ink-muted: #9AA3AD;
+  --slab-screen: rgba(0, 0, 0, 0.34);
+
+  /* Raised from the kit's 0.94 / 0.80.
+     The kit tunes light with the field at full presence because in ITS layout
+     nothing sits on the field — the deck is opaque and the field is seen in the
+     negative space around it. This dashboard is denser: panels cover most of the
+     viewport, so at 0.80 the field's magenta drifted straight through them and
+     12px labels stopped being readable against a backdrop that changes as you
+     scroll. The Field Is Not A Text Surface Rule says the fix is never a darker
+     ink token — it is geometry. Making the panel genuinely opaque IS that fix:
+     the field now reads in the gutters, not under the words. */
+  --frost-bar: rgba(255, 255, 255, 0.97);
+  --frost-panel: rgba(255, 255, 255, 0.96);
+  --hairline: rgba(16, 24, 32, 0.12);
+  --hairline-slab: rgba(255, 255, 255, 0.1);
+
+  /* A restrained foliage/water/harvest gradient — the field's hues borrowed for
+     a 1px border on a highlighted surface. Theme-independent like the field
+     hues themselves, so it is defined once here and inherited by dark. Low
+     alpha so it reads as a sheen, never as colour. */
+  --mb-iris: linear-gradient(
+    135deg,
+    rgba(31, 107, 51, 0.30),
+    rgba(44, 125, 160, 0.26),
+    rgba(192, 138, 23, 0.22),
+    rgba(169, 82, 47, 0.18)
+  );
+
+  /* Light uses tinted BLACK so hover reads as pressure into the deck. */
+  --surface-raised: rgba(255, 255, 255, 0.6);
+  --surface-sunken: rgba(16, 24, 32, 0.035);
+  --control: rgba(16, 24, 32, 0.05);
+  --control-hover: rgba(16, 24, 32, 0.09);
+  --control-active: rgba(16, 24, 32, 0.13);
+
+  /* The four measurement channels, taken from the logo's four materials:
+     foliage, water, brick, and the neutral it all sits on. */
+  --c1: #1F6B33;
+  --c2: #2C7DA0;
+  --c3: #A9522F;
+  --c4: #8C8F84;
+
+  /* State washes. None borrows a C1–C4 hue or a field hue. Ink values are set
+     for ≥4.5:1 against their own wash on the frosted deck. */
+  --state-risk: #6f8296;
+  --state-risk-ink: #2f3d4a;
+  --state-rework: #b08a63;
+  --state-rework-ink: #5b3b1f;
+  --state-extension: #8079a3;
+  --state-extension-ink: #3d3757;
+  --state-blocked: #97706e;
+  --state-blocked-ink: #532f2d;
+  --state-overdue: #a35f5f;
+  --state-overdue-ink: #5a2626;
+  --state-positive: #5f8a72;
+  --state-positive-ink: #24422f;
+
+  /* Chart environment — pearlescent glass. No bloom: glow in daylight reads as
+     neon, which is the one thing this must never be. */
+  --graph-grid: rgba(16, 24, 32, 0.06);
+  --graph-axis: rgba(16, 24, 32, 0.11);
+  --flow-created: #35709A;
+  --flow-assigned: #4C7A5A;
+  --flow-rework: #B06A3C;
+  --flow-completed: #1F6B33;
+  --flow-approved: #C08A17;
+  --flow-cancelled: #A2503E;
+
+  --deck-seat: 0 1px 2px rgba(16, 24, 32, 0.05), 0 8px 22px -12px rgba(16, 24, 32, 0.14);
+  --slab-seat: drop-shadow(0 14px 30px rgba(16, 24, 32, 0.22));
+
+  /* Calmed from the kit's 1.35 saturation / full blob opacity. The signature
+     still reads in the gutters and around the deck; it just stops competing
+     with the content sitting on top of it. */
+  /* Calmer still than the kit's own calmed values, and now essentially off.
+     The brief for this product was a plain, legible tool; with a paper ground
+     the field's only remaining job is to keep the gutters from reading as a
+     dead flat slab, so it is a neutral wash at a fraction of its old presence.
+     Nothing here is allowed to be visible under text — see rule 3 in
+     DESIGN.md. */
+  --field-base: #F1F3F6;
+  --field-saturation: 0.5;
+  --field-blob-opacity: 0.16;
+  --field-spec-light: 0.14;
+  --field-spec-dark: 0.08;
+  --field-vignette: rgba(16, 24, 32, 0.08);
+  --body-bg: #EDEFF2;
+
+  --row-hover: rgba(16, 24, 32, 0.035);
+  --row-live: rgba(16, 24, 32, 0.05);
+
+  color-scheme: light;
+}
+
+/* ── DARK ───────────────────────────────────────────────────────
+   The material ORDER is preserved but values are re-derived:
+   · the field loses saturation and gains depth
+   · the deck stays opaque; depth comes from a deep ground and a
+     crisp lit edge, not from smoke
+   · the slab goes DARKER than the deck rather than lighter, and
+     stays the most present material because it is the deepest
+     surface with the brightest content
+   · interaction surfaces switch to tinted WHITE                   */
+.mb-ui[data-theme="dark"] {
+  --ink: #ECEFF3;
+  --ink-muted: #A9B0B9;
+  --ink-faint: #99A1AB;
+
+  --slab: #0E1114;
+  --slab-ink: #F5F7F9;
+  --slab-ink-muted: #99A1AB;
+  /* The halftone screen lightens rather than darkens on a near-black slab. */
+  --slab-screen: rgba(255, 255, 255, 0.16);
+
+  /* Raised from the kit's 0.92 / 0.74 for the same reason as light: with the
+     panel blur spent on the chrome instead, a 0.74 panel let the field's hues
+     sit directly under body text. The deck stays translucent enough to tint. */
+  --frost-bar: rgba(20, 24, 28, 0.95);
+  --frost-panel: rgba(28, 32, 38, 0.90);
+  --hairline: rgba(255, 255, 255, 0.12);
+  --hairline-slab: rgba(255, 255, 255, 0.09);
+
+  --surface-raised: rgba(255, 255, 255, 0.05);
+  --surface-sunken: rgba(0, 0, 0, 0.24);
+  --control: rgba(255, 255, 255, 0.08);
+  --control-hover: rgba(255, 255, 255, 0.13);
+  --control-active: rgba(255, 255, 255, 0.18);
+
+  /* Channel hues lift in lightness at identical hue, so C1's green and C3's
+     brick do not sink into a near-black slab. */
+  --c1: #4FBF6B;
+  --c2: #64B6D8;
+  --c3: #D08055;
+  --c4: #A2A79C;
+
+  --state-risk: #7c93aa;
+  --state-risk-ink: #cfe0ef;
+  --state-rework: #c79a6d;
+  --state-rework-ink: #f4e2ce;
+  --state-extension: #9a92c4;
+  --state-extension-ink: #e3dffa;
+  --state-blocked: #b58582;
+  --state-blocked-ink: #f7dedc;
+  --state-overdue: #c47575;
+  --state-overdue-ink: #fbdcdc;
+  --state-positive: #74a88a;
+  --state-positive-ink: #d8f0e2;
+
+  --graph-grid: rgba(255, 255, 255, 0.06);
+  --graph-axis: rgba(255, 255, 255, 0.09);
+  --flow-created: #7FB8D6;
+  --flow-assigned: #8CC49B;
+  --flow-rework: #E0A177;
+  --flow-completed: #85DA9A;
+  --flow-approved: #E7BE4E;
+  --flow-cancelled: #D98D78;
+
+  /* Shadows do almost nothing on a dark ground — depth comes from the lit top
+     edge and the blur. Kept shallow so panels do not smear together. */
+  --deck-seat: 0 8px 24px -12px rgba(0, 0, 0, 0.7);
+  --slab-seat: drop-shadow(0 14px 30px rgba(0, 0, 0, 0.55));
+
+  --field-base: #141B16;
+  --field-saturation: 0.6;
+  --field-spec-light: 0.12;
+  --field-spec-dark: 0.5;
+  --field-vignette: rgba(0, 0, 0, 0.5);
+  --body-bg: #0A0F0B;
+
+  --row-hover: rgba(255, 255, 255, 0.05);
+  --row-live: rgba(255, 255, 255, 0.07);
+
+  color-scheme: dark;
+}
+
+@layer base {
+  /* Scoped to the kit's own subtree — the rest of the app keeps its own base
+     layer, in globals.css. */
+  .mb-ui {
+    color: var(--color-ink);
+    font-family:
+      ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+      "Helvetica Neue", Arial, sans-serif;
+    letter-spacing: -0.008em;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Numbers here sit in columns and change in place. */
+  .mb-ui :where(output, [data-figure]) {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* The outline follows each element's own radius; never restate one here or
+     focused pills and slabs get squared off. */
+  .mb-ui :focus-visible {
+    outline: 2px solid var(--color-ink);
+    outline-offset: 2px;
+  }
+
+  /* On the slab the deck-ink outline would vanish. */
+  .mb-ui .slab :focus-visible,
+  .mb-ui [data-on-slab] :focus-visible {
+    outline-color: var(--color-slab-ink);
+  }
+
+  .mb-ui ::selection {
+    background: var(--color-ink);
+    color: var(--body-bg);
+  }
+
+  /* Firefox has no backdrop-filter parity in every config; keep frost opaque
+     enough that text contrast never depends on the blur landing. */
+  @supports not (backdrop-filter: blur(1px)) {
+    .mb-ui .frost-bar {
+      background-color: color-mix(in srgb, var(--body-bg) 20%, var(--frost-bar));
+    }
+    .mb-ui .frost-panel {
+      background-color: color-mix(
+        in srgb,
+        var(--body-bg) 30%,
+        var(--frost-panel)
+      );
+    }
+  }
+
+  /* Restrained on purpose — a full-page cross-fade on every switch is a
+     distraction in a tool people sit in all day. Only surfaces move, and never
+     during the initial paint. */
+  /* The kit puts this on `*`. On a dashboard of eleven panels and several
+     hundred table cells that is a transition declaration on every node, and
+     `transition-colors` repaints rather than composites — so a hover anywhere
+     in a long table asks the whole subtree to re-evaluate. Narrowed to the
+     surfaces and controls that actually change colour on a theme switch, which
+     is all the rule was ever for. */
+  .mb-ui.theme-ready
+    :where(
+      .frost-bar,
+      .frost-panel,
+      .slab,
+      .ck-panel,
+      a,
+      button,
+      input,
+      select,
+      textarea,
+      [role="tab"],
+      [role="radio"]
+    ) {
+    transition:
+      background-color 180ms var(--ease-deck),
+      border-color 180ms var(--ease-deck),
+      color 180ms var(--ease-deck);
+  }
+  .mb-ui.theme-ready :where(.field, .field-blob, .field-spec) {
+    transition: none;
+  }
+}
+
+@layer components {
+  /* ── The ground ───────────────────────────────────────────────
+     The app's own body background belongs to the other departments, so the
+     CEO side paints its own behind the field rather than restyling <body>. */
+  .mb-ui .mb-ground {
+    position: fixed;
+    inset: 0;
+    z-index: -2;
+    background-color: var(--body-bg);
+    pointer-events: none;
+  }
+
+  /* ── The frosted deck ─────────────────────────────────────── */
+
+  /* WHERE THE BLUR LIVES, AND WHERE IT DOES NOT.
+   *
+   * Every element carrying `backdrop-filter` is promoted to its own compositing
+   * layer, reads back what is behind it, and re-runs a wide blur kernel on every
+   * frame that anything moves underneath — which, while scrolling, is all of
+   * them. One dashboard renders fifteen panels; with the field's ten layers that
+   * was twenty-five permanent blur layers, and scrolling a long table dropped
+   * frames on ordinary hardware.
+   *
+   * So the blur is spent only where it reads: the CHROME. The bar is fixed, so
+   * content slides under it and the glass is visibly doing something. A content
+   * panel scrolls WITH its own backdrop — the blurred image behind it barely
+   * changes, which is a permanent cost for an effect nobody can see. Panels keep
+   * the frost COLOUR (they are still translucent, so the field still tints them)
+   * and drop the filter. That is also why their opacity is raised below: text
+   * contrast must never depend on the blur landing.
+   */
+  .mb-ui .frost-bar {
+    background-color: var(--color-frost-bar);
+    box-shadow:
+      var(--shadow-deck-seat),
+      inset 0 1px 0 var(--frost-lip, rgba(255, 255, 255, 0.6));
+  }
+
+  /* The blur is declared ONLY when low mode is off, rather than declared and
+     then overridden. Overriding it does not actually help: an element whose
+     `backdrop-filter` resolves to `none` has still had the property applied,
+     and the fight to win that cascade proved brittle across layers. Withholding
+     the declaration means low mode has no backdrop-filter to composite at all —
+     which is the entire point of the mode. */
+  .mb-ui:not([data-perf="low"]) .frost-bar {
+    backdrop-filter: blur(18px) saturate(1.5);
+  }
+
+  .mb-ui .frost-panel {
+    background-color: var(--color-frost-panel);
+    box-shadow:
+      var(--shadow-deck-seat),
+      inset 0 1px 0 var(--frost-lip, rgba(255, 255, 255, 0.45));
+  }
+
+  /* Low mode kills the chrome blur, declared HERE rather than only in the
+     low-perf block at the end of the file. That block is unlayered, and an
+     unlayered `!important` still lost to this layer's normal declaration —
+     cascade layers invert precedence for important declarations, so the
+     "obvious" override silently did nothing and the bars stayed blurred with
+     effects switched off. Same layer, higher specificity, no ambiguity. */
+  .mb-ui[data-perf="low"] .frost-bar,
+  .mb-ui[data-perf="low"] .frost-panel,
+  .mb-ui[data-perf="low"] .ck-panel {
+    backdrop-filter: none;
+  }
+
+  /* The lit top edge separates stacked panels. On a dark ground a 45%-white lip
+     is a glowing outline, so it drops to a hairline. */
+  .mb-ui[data-theme="dark"] {
+    --frost-lip: rgba(255, 255, 255, 0.08);
+  }
+
+  /* ── The stepped slab ─────────────────────────────────────────
+     Composed from a body plus a tab and a radial-gradient fillet, never a
+     clip-path, so the radii stay true at any size.                */
+
+  .mb-ui .slab-wrap {
+    filter: var(--slab-seat);
+    padding-top: var(--tab-rise, 72px);
+  }
+
+  .mb-ui .slab {
+    position: relative;
+    background-color: var(--color-slab);
+    border-radius: var(--slab-radius, 28px);
+    color: var(--color-slab-ink);
+    box-shadow: inset 0 1px 0 var(--slab-lip, rgba(255, 255, 255, 0.08));
+  }
+
+  /* The slab MATERIAL without the stepped silhouette. Per The Earned Step Rule
+     the step is reserved for a card carrying an identity, so a plain
+     measurement panel takes this instead. */
+  .mb-ui .slab-flat::before,
+  .mb-ui .slab-flat::after {
+    display: none;
+  }
+
+  /* In dark mode the slab sits BELOW the deck in value, so it needs a stronger
+     lit edge and a faint ring to stay separate from the field. */
+  .mb-ui[data-theme="dark"] .slab {
+    --slab-lip: rgba(255, 255, 255, 0.14);
+    box-shadow:
+      inset 0 1px 0 var(--slab-lip),
+      0 0 0 1px rgba(255, 255, 255, 0.06);
+  }
+
+  .mb-ui .slab::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: calc(var(--tab-rise, 72px) * -1);
+    width: var(--step-at, 71%);
+    height: calc(var(--tab-rise, 72px) + var(--slab-radius, 28px) + 2px);
+    background-color: var(--color-slab);
+    border-radius: var(--slab-radius, 28px) var(--slab-radius, 28px) 0 0;
+    box-shadow: inset 0 1px 0 var(--slab-lip, rgba(255, 255, 255, 0.08));
+  }
+
+  .mb-ui .slab::after {
+    content: "";
+    position: absolute;
+    left: var(--step-at, 71%);
+    top: calc(var(--slab-radius, 28px) * -1);
+    width: var(--slab-radius, 28px);
+    height: var(--slab-radius, 28px);
+    background: radial-gradient(
+      circle at top right,
+      transparent var(--slab-radius, 28px),
+      var(--color-slab) calc(var(--slab-radius, 28px) + 0.5px)
+    );
+  }
+
+  .mb-ui .slab-content {
+    position: relative;
+    z-index: 1;
+  }
+
+  /* ── The iridescent field ─────────────────────────────────────
+     Six large soft hues drifting on independent cycles. In dark mode
+     saturation drops and the specular layer inverts its balance — a bright
+     field behind dark frost reads as mud.                          */
+
+  .mb-ui .field {
+    position: fixed;
+    inset: -20%;
+    z-index: -1;
+    background-color: var(--field-base);
+  }
+
+  .mb-ui .field-blob {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(46px) saturate(var(--field-saturation));
+    /* Per-blob alpha × per-theme dimming. See IridescentField for why the
+       component passes `--blob-alpha` instead of an inline opacity. */
+    opacity: calc(var(--blob-alpha, 1) * var(--field-blob-opacity, 1));
+    will-change: transform;
+    animation: field-drift var(--dur, 44s) var(--ease-deck) infinite alternate;
+    animation-delay: var(--delay, 0s);
+  }
+
+  .mb-ui[data-theme="dark"] .field-blob {
+    --field-blob-opacity: 0.42;
+  }
+
+  .mb-ui .field-spec {
+    position: absolute;
+    mix-blend-mode: overlay;
+    border-radius: 50%;
+    filter: blur(14px);
+    will-change: transform;
+    animation: field-drift var(--dur, 52s) var(--ease-deck) infinite alternate;
+    animation-delay: var(--delay, 0s);
+    background: repeating-linear-gradient(
+      var(--angle, 108deg),
+      rgba(255, 255, 255, var(--field-spec-light)) 0,
+      rgba(255, 255, 255, var(--field-spec-light)) 3%,
+      rgba(255, 255, 255, 0) 9%,
+      rgba(0, 0, 0, var(--field-spec-dark)) 16%,
+      rgba(0, 0, 0, 0) 24%
+    );
+  }
+
+  .mb-ui .field-vignette {
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(
+      120% 90% at 50% 30%,
+      transparent 44%,
+      var(--field-vignette) 100%
+    );
+  }
+
+  @keyframes field-drift {
+    from {
+      transform: translate3d(0, 0, 0) scale(1);
+    }
+    to {
+      transform: translate3d(var(--dx, 6%), var(--dy, -5%), 0)
+        scale(var(--ds, 1.18));
+    }
+  }
+
+  /* ── The C1–C4 component band ───────────────────────────────── */
+
+  .mb-ui .band-fill {
+    background-image:
+      radial-gradient(
+        circle,
+        var(--color-slab-screen) 0.5px,
+        transparent 0.6px
+      ),
+      linear-gradient(
+        to bottom,
+        rgba(255, 255, 255, 0.14) 0%,
+        rgba(255, 255, 255, 0) 22%,
+        rgba(0, 0, 0, 0.16) 78%,
+        rgba(0, 0, 0, 0.3) 100%
+      );
+    background-size:
+      3px 3px,
+      100% 100%;
+    box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.34);
+  }
+
+  .mb-ui .rise {
+    animation: rise 620ms var(--ease-out-expo) both;
+    animation-delay: var(--delay, 0ms);
+  }
+
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(14px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  /* Scroll rails: neighbours bleed off both edges deliberately. */
+  .mb-ui .rail {
+    scrollbar-width: none;
+  }
+  .mb-ui .rail::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Dense scroll regions keep a visible thumb — hiding it in a data table
+     removes the only cue that content continues. */
+  .mb-ui .scroll-slim {
+    scrollbar-width: thin;
+    scrollbar-color: var(--control-active) transparent;
+  }
+  .mb-ui .scroll-slim::-webkit-scrollbar {
+    height: 8px;
+    width: 8px;
+  }
+  .mb-ui .scroll-slim::-webkit-scrollbar-thumb {
+    background: var(--control-active);
+    border-radius: 99px;
+  }
+  .mb-ui .scroll-slim::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  /* ── Skeletons ────────────────────────────────────────────────
+     A white shimmer on a light deck is invisible and a black shimmer on a dark
+     deck is a hole, so both ends come from the control tokens. */
+  .mb-ui .skeleton {
+    background: linear-gradient(
+      90deg,
+      var(--control) 25%,
+      var(--control-hover) 37%,
+      var(--control) 63%
+    );
+    background-size: 400% 100%;
+    animation: skeleton 1400ms ease-in-out infinite;
+    border-radius: 9999px;
+  }
+
+  .mb-ui .skeleton-block {
+    border-radius: var(--radius-inset);
+  }
+
+  @keyframes skeleton {
+    from {
+      background-position: 100% 50%;
+    }
+    to {
+      background-position: 0 50%;
+    }
+  }
+
+  /* ── Identity hues for monogram avatars ──────────────────────
+     From the FIELD palette, and that choice is the whole point. The state
+     washes mean "what condition" — an avatar tinted `overdue` reads as a
+     problem employee rather than as a person — and c1–c4 mean "which channel".
+     Field hues are decorative by definition, which is exactly what identity
+     colour is. Six of them, none darker than ~#93a5bd so the black monogram
+     keeps ≥4.5:1 on top.
+
+     Usage: `<span className="matrubhoomi-avatar" data-avatar-hue={n % 6}>PB</span>`,
+     where n is a stable hash of the person's name. Declared once here so every
+     department colours people the same way. */
+  .mb-ui .matrubhoomi-avatar {
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    border-radius: 9999px;
+    color: rgba(0, 0, 0, 0.85);
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4);
+    overflow: hidden;
+
+    /* A DEFAULT SIZE, because the class had none.
+       An avatar with no h-/w- utility collapsed to the height of its two
+       initials — a tiny squashed oval instead of a circle. That is not a
+       theoretical risk: eight usages across the app carried no size class at
+       all, so they all rendered broken. `aspect-ratio` with a fixed block-size
+       keeps it perfectly round no matter which of the two axes a utility
+       overrides, and any h-/w- utility still wins over these because Tailwind
+       utilities sit in a later cascade layer. */
+    block-size: 2rem;
+    aspect-ratio: 1 / 1;
+    font-size: 0.6875rem;
+    line-height: 1;
+    text-transform: uppercase;
+  }
+  .mb-ui [data-avatar-hue="0"] { background: linear-gradient(148deg, #f2e6d2, #dcc9ab); }
+  .mb-ui [data-avatar-hue="1"] { background: linear-gradient(148deg, #e6c79c, #d6ac7e); }
+  .mb-ui [data-avatar-hue="2"] { background: linear-gradient(148deg, #d9a4b0, #c78e9c); }
+  .mb-ui [data-avatar-hue="3"] { background: linear-gradient(148deg, #c0abd1, #a690bd); }
+  .mb-ui [data-avatar-hue="4"] { background: linear-gradient(148deg, #9fb2cb, #93a5bd); }
+  .mb-ui [data-avatar-hue="5"] { background: linear-gradient(148deg, #b4bbad, #9aa393); }
+
+  /* Hatched track — "nothing tracked", encoded without colour so it survives
+     both themes and colour-vision differences. */
+  .mb-ui .hatch {
+    background-image: repeating-linear-gradient(
+      -45deg,
+      var(--control) 0,
+      var(--control) 1.5px,
+      transparent 1.5px,
+      transparent 6px
+    );
+  }
+}
+
+/* Content is visible by default; motion is the enhancement. */
+@media (prefers-reduced-motion: reduce) {
+  .mb-ui *,
+  .mb-ui *::before,
+  .mb-ui *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* A loading spinner is a status, not decoration — the one animation that
+     exists specifically to say "still working". Freezing it to a single
+     0.01ms frame doesn't reduce motion, it removes the only sign a request
+     is in flight, and it leaves the icon looking like a broken half-circle
+     rather than an intentionally still one. Restored for both this
+     accessibility mode and "low" performance mode below, for the same
+     reason in both places. */
+  .mb-ui .animate-spin {
+    animation-duration: 1s !important;
+    animation-iteration-count: infinite !important;
+  }
+}
+
+/* ── Low-end device mode ──────────────────────────────────────────────────────
+ * `data-perf="low"` on the CEO root. The field is the single largest cost in
+ * the page and it runs AT REST — six 46vw blobs at blur(46px) plus four
+ * specular bands, each with will-change: transform, so ten permanent
+ * compositing layers, which on integrated graphics is real VRAM.
+ *
+ * Removed entirely rather than paused, and that is coherent rather than merely
+ * cheaper: the field exists so the frosted surfaces have something to look
+ * through. With the blur gone there is no glass, so there is nothing for it to
+ * be behind. Low mode is flat on purpose, top to bottom.
+ */
+.mb-ui[data-perf="low"] {
+  --frost-bar: rgb(248, 248, 250);
+  --frost-panel: rgb(238, 238, 240);
+  --surface-raised: rgb(250, 250, 252);
+}
+
+.mb-ui[data-theme="dark"][data-perf="low"] {
+  --frost-bar: rgb(24, 24, 28);
+  --frost-panel: rgb(32, 32, 37);
+  --surface-raised: rgb(30, 30, 35);
+}
+
+.mb-ui[data-perf="low"] .frost-bar,
+.mb-ui[data-perf="low"] .frost-panel {
+  backdrop-filter: none;
+  /* The inset lip goes with the blur — it reads as a glass edge, and without
+     the glass it is just a bright line. The seat shadow stays: it is what
+     separates a panel from the page. */
+  box-shadow: var(--shadow-deck-seat);
+}
+
+/* Every Tailwind backdrop-blur utility, in one place. */
+.mb-ui[data-perf="low"] * {
+  --tw-backdrop-blur: ;
+  backdrop-filter: none !important;
+}
+
+.mb-ui[data-perf="low"] *,
+.mb-ui[data-perf="low"] *::before,
+.mb-ui[data-perf="low"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+/* Loading spinners are functional, not decorative — "low" mode is for turning
+ * off AMBIENT motion (the field, hover transitions, the bloom-in), not the
+ * one animation whose entire job is telling someone a request is in flight.
+ * Without this, the blanket rule above throttled animate-spin's 1s rotation
+ * down to a single 0.01ms frame, so every spinner in the app "played" for a
+ * hundredth of a millisecond and froze wherever that frame landed — reading
+ * as a static, broken half-circle rather than a spinner. This became the
+ * DEFAULT experience everywhere the moment "low" became the default
+ * performance mode (12 Aug 2026), which is what made it look like loading
+ * itself was broken across the whole app, not just decorative effects.
+ */
+.mb-ui[data-perf="low"] .animate-spin {
+  animation-duration: 1s !important;
+  animation-iteration-count: infinite !important;
+}
+
+/* Decorative depth. Controls keep their focus ring — that is not decoration. */
+.mb-ui[data-perf="low"] .frost-panel,
+.mb-ui[data-perf="low"] [class*="shadow-"] {
+  box-shadow: none;
+}
+
+/* The component also skips rendering these nodes in low mode, so the layers are
+   never created. This is the backstop for a stale DOM mid-switch. */
+.mb-ui[data-perf="low"] .field,
+.mb-ui[data-perf="low"] .field-blob,
+.mb-ui[data-perf="low"] .field-spec {
+  display: none;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Everything below was previously injected from JS template literals. It lives
+   here now because a backtick inside a CSS comment silently terminated the
+   literal and broke the build — twice. Real CSS cannot do that.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── ck-* bridge: the pages converted before this design system arrived ──
+ *
+ * TOKEN half of the bridge. The CEO pages were first converted onto an earlier
+ * `--ck-*` palette, and that pass left ~2,800 inline `style={{ color:
+ * "var(--ck-ink-3)" }}` attributes across two dozen files. Deleting those
+ * variables when this system landed did not raise a single error — a var()
+ * that resolves to nothing just paints nothing — so those pages quietly lost
+ * their colours instead of breaking loudly.
+ *
+ * Re-declaring the old names as aliases fixes every one of them at once, and
+ * keeps them honest: each maps onto the token that carries the same MEANING,
+ * so a page written against the old palette now follows this one, including
+ * through the theme switch. Delete an alias once no file references it.
+ */
+.mb-ui {
+  --ck-ink: var(--ink);
+  --ck-ink-2: var(--ink-muted);
+  --ck-ink-3: var(--ink-faint);
+
+  --ck-bg: var(--body-bg);
+  --ck-solid: var(--frost-bar);
+  --ck-panel: var(--frost-panel);
+  --ck-panel-2: var(--surface-sunken);
+
+  --ck-line: var(--hairline);
+  --ck-line-strong: var(--control-active);
+
+  /* The old accent pair was a saturated emerald/cyan. Mapped onto the state
+     palette by meaning — "good" and "informational" — rather than onto a
+     channel hue, which would have made them read as score components. */
+  --ck-accent: var(--state-positive-ink);
+  --ck-accent-2: var(--state-risk-ink);
+  --ck-accent-ink: var(--body-bg);
+  --ck-wash: color-mix(in srgb, var(--state-positive) 22%, transparent);
+
+  --ck-warn: var(--state-rework-ink);
+  --ck-warn-wash: color-mix(in srgb, var(--state-rework) 24%, transparent);
+  --ck-danger: var(--state-overdue-ink);
+  --ck-danger-wash: color-mix(in srgb, var(--state-overdue) 22%, transparent);
+  --ck-purple: var(--state-extension-ink);
+
+  --ck-shadow: var(--deck-seat);
+  /* The old kit glowed; this one does not. Kept as a name so the ~40 sites
+     that reference it resolve, but it resolves to an ordinary seat shadow. */
+  --ck-glow: var(--deck-seat);
+  --ck-radius: 18px;
+}
+
+
+/* ── ck-* → Chrome Under Frost ─────────────────────────────── */
+
+.mb-ui .ck-mono,
+.mb-ui [data-figure]{ font-variant-numeric:tabular-nums; }
+
+.mb-ui .ck-label{
+  font-size:11px; font-weight:500; letter-spacing:.09em; text-transform:uppercase;
+  color:var(--ink-faint);
+}
+
+/* The default surface. Same material and corner as the kit's Panel — and, like
+   it, no backdrop-filter: a content panel scrolls with its own backdrop, so the
+   blur costs a compositing layer to show nothing. See the note on .frost-panel. */
+.mb-ui .ck-panel{
+  position:relative;
+  background-color:var(--frost-panel);
+  border:1px solid var(--hairline);
+  border-radius:18px;
+  box-shadow:var(--deck-seat), inset 0 1px 0 var(--frost-lip, rgba(255,255,255,.45));
+  color:var(--ink);
+}
+.mb-ui .ck-panel.is-hover{ transition:background-color 180ms var(--ease-deck); }
+/* Toward the bar colour, which is the more opaque of the two frost values —
+   a hover must never make a surface thinner than it was at rest. */
+.mb-ui .ck-panel.is-hover:hover{ background-color:var(--frost-bar); }
+/* Was a neon corner bracket; now a quiet hairline the panel wears at the top. */
+.mb-ui .ck-corner::after{
+  content:""; position:absolute; top:-1px; left:18px; right:18px; height:1px;
+  background:var(--ink); opacity:.18; pointer-events:none;
+}
+
+/* Controls are pills — nothing in this system is square-cornered. */
+.mb-ui .ck-btn{
+  display:inline-flex; align-items:center; justify-content:center; gap:6px;
+  height:36px; padding:0 16px; border-radius:9999px; cursor:pointer;
+  background:var(--control); border:0; color:var(--ink);
+  font-size:14px; font-weight:500; letter-spacing:-.012em; white-space:nowrap;
+  transition:background-color 180ms var(--ease-deck), opacity 180ms var(--ease-deck);
+}
+.mb-ui .ck-btn:hover{ background:var(--control-hover); }
+.mb-ui .ck-btn.is-primary{ background:var(--ink); color:var(--body-bg); }
+.mb-ui .ck-btn.is-primary:hover{ opacity:.9; background:var(--ink); }
+.mb-ui .ck-btn.is-danger{
+  background:color-mix(in srgb, var(--state-overdue) 22%, transparent);
+  color:var(--state-overdue-ink);
+}
+.mb-ui .ck-btn:disabled{ opacity:.45; cursor:not-allowed; }
+.mb-ui .ck-icon-btn{ width:36px; height:36px; padding:0; }
+
+/* State chips. Each tone pairs a wash with an ink value tuned per theme;
+   neutral stays untinted on purpose — tinting the normal case makes the
+   exceptions invisible. */
+.mb-ui .ck-chip{
+  display:inline-flex; align-items:center; gap:4px; padding:5px 10px;
+  border-radius:9999px; font-size:12px; font-weight:400; white-space:nowrap;
+  background:var(--control); color:var(--ink-muted); border:0;
+}
+.mb-ui .ck-chip.is-ok{
+  background:color-mix(in srgb, var(--state-positive) 24%, transparent);
+  color:var(--state-positive-ink);
+}
+.mb-ui .ck-chip.is-info{
+  background:color-mix(in srgb, var(--state-risk) 24%, transparent);
+  color:var(--state-risk-ink);
+}
+.mb-ui .ck-chip.is-warn{
+  background:color-mix(in srgb, var(--state-rework) 26%, transparent);
+  color:var(--state-rework-ink);
+}
+.mb-ui .ck-chip.is-danger{
+  background:color-mix(in srgb, var(--state-overdue) 26%, transparent);
+  color:var(--state-overdue-ink);
+}
+
+.mb-ui .ck-input, .mb-ui .ck-select{
+  height:38px; padding:0 14px; border-radius:14px; font-size:14px;
+  background:var(--surface-raised); color:var(--ink); border:0;
+  box-shadow:inset 0 0 0 1px var(--hairline);
+  transition:box-shadow 180ms var(--ease-deck);
+}
+.mb-ui .ck-input::placeholder{ color:var(--ink-faint); }
+.mb-ui .ck-input:focus, .mb-ui .ck-select:focus{
+  outline:none; box-shadow:inset 0 0 0 1.5px var(--ink);
+}
+
+/* Tables separate with hairlines and space, never with rules or zebra fills. */
+.mb-ui .ck-table{ width:100%; border-collapse:collapse; font-size:13px; }
+.mb-ui .ck-table th{
+  text-align:left; font-size:11px; font-weight:500; letter-spacing:.09em;
+  text-transform:uppercase; color:var(--ink-faint);
+  padding:10px 14px; border-bottom:1px solid var(--hairline); white-space:nowrap;
+  background:transparent;
+}
+.mb-ui .ck-table td{
+  padding:11px 14px; border-bottom:1px solid var(--hairline);
+  vertical-align:middle; color:var(--ink);
+}
+.mb-ui .ck-table tr:last-child td{ border-bottom:0; }
+.mb-ui .ck-table tbody tr{ transition:background-color 120ms var(--ease-deck); }
+.mb-ui .ck-table tbody tr:hover{ background:var(--row-hover); }
+.mb-ui .ck-table .is-num{ text-align:right; font-variant-numeric:tabular-nums; }
+
+/* Progress is neutral: saturated colour in this system means "which channel",
+   so goal and task progress read in ink. Only health takes a state tone. */
+.mb-ui .ck-meter{
+  height:4px; border-radius:9999px; background:var(--control-active); overflow:hidden;
+}
+.mb-ui .ck-meter > i{
+  display:block; height:100%; border-radius:9999px; width:100%;
+  background:color-mix(in srgb, var(--ink) 70%, transparent);
+  transform-origin:left center;
+  transform:scaleX(calc(var(--ck-pct, 0) / 100));
+  transition:transform 500ms var(--ease-out-expo);
+}
+.mb-ui .ck-meter.is-warn > i{ background:var(--state-risk); }
+.mb-ui .ck-meter.is-danger > i{ background:var(--state-overdue); }
+
+/* Pill tabs. Nothing in this system underlines. */
+.mb-ui .ck-tabs{
+  display:flex; align-items:center; gap:4px; overflow-x:auto;
+  scrollbar-width:none; background:transparent; border:0; padding:0;
+}
+.mb-ui .ck-tabs::-webkit-scrollbar{ display:none; }
+.mb-ui .ck-tab{
+  display:inline-flex; flex-shrink:0; align-items:center; gap:6px;
+  padding:8px 14px; border-radius:9999px; border:0; cursor:pointer;
+  font-size:14px; font-weight:500; letter-spacing:-.012em; color:var(--ink-muted);
+  white-space:nowrap; background:transparent;
+  transition:color 180ms var(--ease-deck), background-color 180ms var(--ease-deck);
+}
+.mb-ui .ck-tab:hover{ background:var(--surface-sunken); color:var(--ink); }
+.mb-ui .ck-tab.is-on{ background:var(--control); color:var(--ink); }
+.mb-ui .ck-tab .ck-tab-badge{
+  font-size:11px; padding:1px 6px; border-radius:9999px;
+  background:var(--control-active); color:var(--ink); font-variant-numeric:tabular-nums;
+}
+
+.mb-ui .ck-live-dot{
+  width:6px; height:6px; border-radius:9999px; background:var(--state-positive);
+  animation:ck-pulse 2.2s var(--ease-deck) infinite;
+}
+@keyframes ck-pulse{ 0%,100%{opacity:1} 50%{opacity:.35} }
+@keyframes ck-rot{ to{ transform:rotate(360deg) } }
+.mb-ui .ck-spin{ animation:ck-rot 1s linear infinite; }
+.mb-ui .ck-rise{ animation:rise 620ms var(--ease-out-expo) both; }
+.mb-ui .ck-sweep{ position:relative; }
+.mb-ui .ck-glow-text{ color:var(--ink); }
+
+/* ══════════ Tailwind-compat remap (transitional) ══════════
+   For pages not yet rewritten. Frosted surfaces, hairline borders, state
+   washes — so a stale bg-white card still reads as part of the deck. */
+/* No backdrop-filter here on purpose: this selector matches EVERY stale white
+   card on a legacy page — dozens of them — and each one would have become its
+   own permanently-blurred compositing layer. */
+.mb-ui :is(.bg-white,.bg-gray-50,.bg-slate-50,.bg-gray-100,.bg-slate-100,.bg-gray-50\/50){
+  background-color:var(--frost-panel) !important;
+}
+.mb-ui :is(.bg-gray-900,.bg-slate-900,.bg-slate-800){ background-color:var(--slab) !important; color:var(--slab-ink) !important; }
+.mb-ui :is(.text-gray-900,.text-slate-900,.text-gray-800,.text-slate-800,.text-black){ color:var(--ink) !important; }
+.mb-ui :is(.text-gray-700,.text-slate-700,.text-gray-600,.text-slate-600){ color:var(--ink-muted) !important; }
+.mb-ui :is(.text-gray-500,.text-slate-500,.text-gray-400,.text-slate-400,.text-gray-300){ color:var(--ink-faint) !important; }
+.mb-ui :is(.border-gray-100,.border-gray-200,.border-slate-200,.border-slate-100,.border-gray-300,.divide-gray-100,.divide-gray-200){
+  border-color:var(--hairline) !important;
+}
+.mb-ui :is(.divide-gray-100,.divide-gray-200) > *{ border-color:var(--hairline) !important; }
+.mb-ui :is(.shadow,.shadow-sm,.shadow-md,.shadow-lg,.shadow-xl){ box-shadow:var(--deck-seat) !important; }
+/* Hover has to stay OPAQUE.
+   This used to map to `--row-hover`, a 4%-black tint. That tint is correct for
+   a table row, which sits on a panel and composites over it — but these classes
+   are also on cards and buttons that were opaque white, and replacing an opaque
+   background with a 4% wash made them turn transparent on hover, showing the
+   iridescent field straight through the card. Mixing the tint INTO the panel
+   colour keeps the surface solid and still reads as a hover.
+
+   Written as a plain selector list rather than :is(...) — the compiler drops
+   the whole rule when escaped class names sit inside :is(), silently, so the
+   first version of this fix appeared to do nothing at all. */
+.mb-ui .hover\:bg-gray-50:hover,
+.mb-ui .hover\:bg-gray-100:hover,
+.mb-ui .hover\:bg-slate-50:hover,
+.mb-ui .hover\:bg-slate-100:hover {
+  background-color: color-mix(in srgb, var(--ink) 6%, var(--frost-panel)) !important;
+}
+/* Same trap for the plain hover:bg-white case. */
+.mb-ui .hover\:bg-white:hover {
+  background-color: var(--frost-bar) !important;
+}
+/* A filled control is deck ink on the body background, which inverts correctly
+   in dark mode without a second token. */
+.mb-ui :is(.bg-indigo-600,.bg-indigo-500,.bg-blue-600,.bg-blue-500,.bg-emerald-600,.bg-emerald-500,.bg-green-600){
+  background-color:var(--ink) !important; color:var(--body-bg) !important; border-color:transparent !important;
+}
+.mb-ui :is(.hover\:bg-indigo-700:hover,.hover\:bg-blue-700:hover,.hover\:bg-emerald-700:hover){ opacity:.9; }
+.mb-ui :is(.text-indigo-600,.text-indigo-700,.text-blue-600,.text-blue-700){ color:var(--state-risk-ink) !important; }
+.mb-ui :is(.bg-indigo-50,.bg-blue-50,.bg-sky-50){ background-color:color-mix(in srgb, var(--state-risk) 22%, transparent) !important; }
+.mb-ui :is(.text-emerald-600,.text-emerald-700,.text-green-600,.text-green-700){ color:var(--state-positive-ink) !important; }
+.mb-ui :is(.bg-emerald-50,.bg-green-50){ background-color:color-mix(in srgb, var(--state-positive) 22%, transparent) !important; }
+.mb-ui :is(.text-red-600,.text-red-700,.text-red-500,.text-rose-600){ color:var(--state-overdue-ink) !important; }
+.mb-ui :is(.bg-red-50,.bg-rose-50){ background-color:color-mix(in srgb, var(--state-overdue) 20%, transparent) !important; }
+.mb-ui :is(.text-amber-600,.text-amber-700,.text-orange-600,.text-yellow-700){ color:var(--state-rework-ink) !important; }
+.mb-ui :is(.bg-amber-50,.bg-yellow-50,.bg-orange-50){ background-color:color-mix(in srgb, var(--state-rework) 24%, transparent) !important; }
+.mb-ui :is(.border-amber-100,.border-amber-200){ border-color:color-mix(in srgb, var(--state-rework) 40%, transparent) !important; }
+.mb-ui :is(.text-purple-600,.text-purple-700,.text-violet-600){ color:var(--state-extension-ink) !important; }
+.mb-ui :is(.bg-purple-50,.bg-violet-50){ background-color:color-mix(in srgb, var(--state-extension) 22%, transparent) !important; }
+.mb-ui input:not([class*="ck-"]), .mb-ui select:not([class*="ck-"]), .mb-ui textarea:not([class*="ck-"]){
+  background-color:var(--surface-raised) !important; border-color:var(--hairline) !important; color:var(--ink) !important;
+}
+.mb-ui input::placeholder, .mb-ui textarea::placeholder{ color:var(--ink-faint) !important; }
+/* The Matrubhoomi AI composer textarea sits ON the assistant surface, so it must be
+   transparent rather than carry the default field fill/border. Same specificity
+   as the base field rule above, declared later, so it wins the tie. */
+.mb-ui textarea.matrubhoomi-ai-input{ background:transparent !important; border:0 !important; outline:none !important; box-shadow:none !important; appearance:none !important; -webkit-appearance:none !important; }
+/* Staged "thinking" indicator: each settled thought crossfades in as it swaps
+   (React key re-mounts it — the backend paces these to ~1/sec so this reads as
+   a calm dissolve, not a strobe), and the trailing dots bounce while pending. */
+.mb-ui .matrubhoomi-ai-think-step{ display:inline-block; animation:matrubhoomiAiThinkFade .6s cubic-bezier(0.16,1,0.3,1) both; }
+@keyframes matrubhoomiAiThinkFade{ from{ opacity:0; filter:blur(2px); transform:translateY(3px); } to{ opacity:1; filter:blur(0); transform:none; } }
+.mb-ui .matrubhoomi-ai-think-dot{ opacity:.3; animation:matrubhoomiAiThinkWave 1.2s infinite ease-in-out; }
+.mb-ui .matrubhoomi-ai-think-dot:nth-child(2){ animation-delay:.18s; }
+.mb-ui .matrubhoomi-ai-think-dot:nth-child(3){ animation-delay:.36s; }
+@keyframes matrubhoomiAiThinkWave{ 0%,100%{ opacity:.25; } 50%{ opacity:1; } }
+/* Soft caret trailing the answer while it streams in, so it reads as being
+   written live rather than appearing all at once. */
+.mb-ui .matrubhoomi-ai-caret{ display:inline-block; width:2px; height:1.05em; margin-left:2px; vertical-align:text-bottom; border-radius:1px; background:currentColor; opacity:.55; animation:matrubhoomiAiCaret 1s steps(2,start) infinite; }
+@keyframes matrubhoomiAiCaret{ 0%,100%{ opacity:.55; } 50%{ opacity:0; } }
+@media (prefers-reduced-motion:reduce){ .mb-ui .matrubhoomi-ai-think-step,.mb-ui .matrubhoomi-ai-think-dot,.mb-ui .matrubhoomi-ai-caret{ animation:none; } }
+/* A tiny live orb inside the Alt+G pill — the same footage as the full-page
+   assistant, on its own dark chip so the screen-blend drops the black frame in
+   either theme. Ties the pill to the orb without any coloured border. */
+.mb-ui .matrubhoomi-ai-orb{
+  position:relative; flex:0 0 auto; width:26px; height:26px; border-radius:50%;
+  overflow:hidden; background:#0a0a0c; isolation:isolate;
+  border:0; padding:0; cursor:pointer; transition:transform .15s ease, box-shadow .2s ease;
+}
+.mb-ui .matrubhoomi-ai-orb:hover:not(:disabled){ transform:scale(1.08); }
+.mb-ui .matrubhoomi-ai-orb:disabled{ cursor:default; }
+.mb-ui .matrubhoomi-ai-orb-video{
+  position:absolute; inset:0; width:100%; height:100%; object-fit:contain;
+  transform:scale(1.9); mix-blend-mode:screen; pointer-events:none;
+}
+/* Light mode uses the WHITE-background orb footage: a soft off-white chip +
+   `multiply` drops the white frame and shows the orb, mirroring how the dark chip
+   + `screen` drops the black frame in dark mode. (The theme-correct src is set in
+   JS.) The chip is a gentle grey rather than pure white -- multiply paints the
+   whole orb disc in the chip colour, so pure white glared; this softens it. */
+.mb-ui[data-theme="light"] .matrubhoomi-ai-orb,
+.mb-ui[data-theme="light"] .matrubhoomi-ai-voice-orb{ background:#e7e7ec; }
+.mb-ui[data-theme="light"] .matrubhoomi-ai-orb-video{ mix-blend-mode:multiply; }
+/* Listening / speaking: a soft pulsing ring around the orb. */
+.mb-ui .matrubhoomi-ai-orb.is-active{ box-shadow:0 0 0 0 rgba(140,150,255,.55); animation:matrubhoomiAiOrbPulse 1.4s ease-out infinite; }
+@keyframes matrubhoomiAiOrbPulse{ 0%{ box-shadow:0 0 0 0 rgba(140,150,255,.5); } 70%{ box-shadow:0 0 0 7px rgba(140,150,255,0); } 100%{ box-shadow:0 0 0 0 rgba(140,150,255,0); } }
+/* A tiny live-dot on the mic toggle while "Hey Matrubhoomi" is armed. */
+.mb-ui .matrubhoomi-ai-mic-live{
+  position:absolute; top:6px; right:6px; width:6px; height:6px; border-radius:50%;
+  background:var(--state-positive); box-shadow:0 0 6px var(--state-positive);
+  animation:matrubhoomiAiThinkWave 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion:reduce){ .mb-ui .matrubhoomi-ai-orb.is-active,.mb-ui .matrubhoomi-ai-mic-live{ animation:none; } }
+/* ── The Siri-style voice orb ─────────────────────────────────────────────────
+   A small live bubble at the bottom centre (~3× the pill orb) that scales with
+   the caller's voice: --orb-scale is set per audio frame from the mic meter
+   while listening; when busy (thinking / speaking) it breathes on a loop. No
+   full-screen scrim — it floats over the app like a Siri prompt. */
+.mb-ui .matrubhoomi-ai-voice{ animation:matrubhoomiAiVoiceFade .18s ease both; }
+.mb-ui .matrubhoomi-ai-voice-orb{
+  width:78px; height:78px; border-radius:50%;
+  overflow:hidden; background:#0a0a0c; isolation:isolate;
+  --orb-scale:1; transform:scale(var(--orb-scale)); transition:transform .09s ease-out;
+  box-shadow:0 6px 28px -6px rgba(0,0,0,.6), 0 0 26px -6px rgba(140,150,255,.45);
+}
+.mb-ui .matrubhoomi-ai-voice-orb.is-busy{ animation:matrubhoomiAiVoiceBusy 1.7s ease-in-out infinite; }
+.mb-ui .matrubhoomi-ai-voice-orb .matrubhoomi-ai-orb-video{ transform:scale(1.9); }
+/* The caption (status + live transcript) floats just above the orb on a frosted
+   chip so it stays legible over any dashboard behind it. */
+.mb-ui .matrubhoomi-ai-voice-caption{
+  display:flex; flex-direction:column; align-items:center; gap:2px; max-width:min(90vw,420px);
+  padding:8px 16px; border-radius:16px; text-align:center;
+  background:var(--frost-panel); border:1px solid var(--hairline);
+  backdrop-filter:blur(16px) saturate(1.1); -webkit-backdrop-filter:blur(16px) saturate(1.1);
+  box-shadow:var(--deck-seat);
+}
+.mb-ui .matrubhoomi-ai-voice-heard{ margin:0; font-size:15px; line-height:1.4; color:var(--ink); }
+.mb-ui .matrubhoomi-ai-voice-status{ margin:0; font-size:11.5px; font-weight:500; letter-spacing:.02em; color:var(--ink-faint); }
+@keyframes matrubhoomiAiVoiceBusy{ 0%,100%{ transform:scale(1); } 50%{ transform:scale(1.06); } }
+@keyframes matrubhoomiAiVoiceFade{ from{ opacity:0; transform:translateY(6px); } to{ opacity:1; transform:none; } }
+@media (prefers-reduced-motion:reduce){ .mb-ui .matrubhoomi-ai-voice-orb.is-busy{ animation:none; } .mb-ui .matrubhoomi-ai-voice-orb,.mb-ui .matrubhoomi-ai-voice{ transition:none; animation:none; } }
+.mb-ui table :is(thead,.bg-gray-50) th{ background:transparent !important; color:var(--ink-faint) !important; }
+
+/* ── Command-centre pieces utilities cannot express ── */
+
+/* ── Live ticker ── */
+.cc-ticker-belt{
+  position:relative; flex:1; height:100%; overflow:hidden;
+  mask-image:linear-gradient(90deg, transparent, #000 5%, #000 95%, transparent);
+  -webkit-mask-image:linear-gradient(90deg, transparent, #000 5%, #000 95%, transparent);
+}
+.cc-ticker-run{
+  position:absolute; display:flex; align-items:center; gap:44px; height:100%;
+  white-space:nowrap; will-change:transform;
+  animation:cc-ticker 52s linear infinite;
+}
+.cc-ticker-belt:hover .cc-ticker-run{ animation-play-state:paused; }
+@keyframes cc-ticker{ from{ transform:translateX(0) } to{ transform:translateX(-50%) } }
+
+/* ── Order journey stepper ── */
+.cc-steps{ display:flex; align-items:center; }
+.cc-step{ display:flex; align-items:center; flex:1; min-width:0; }
+.cc-step:last-child{ flex:0; }
+.cc-step-dot{
+  width:7px; height:7px; border-radius:9999px; flex:none;
+  background:var(--control-active);
+}
+.cc-step.is-done .cc-step-dot{ background:color-mix(in srgb, var(--ink) 72%, transparent); }
+.cc-step.is-active .cc-step-dot{
+  background:var(--state-positive);
+  box-shadow:0 0 0 3px color-mix(in srgb, var(--state-positive) 26%, transparent);
+}
+.cc-step-bar{ height:1.5px; flex:1; background:var(--control-active); margin:0 3px; }
+.cc-step.is-done .cc-step-bar{ background:color-mix(in srgb, var(--ink) 40%, transparent); }
+
+/* ── Number input, spinner removed ──────────────────────────────────────
+   Only reachable via a stylesheet rule — the browser's up/down stepper lives
+   in a pseudo-element (`::-webkit-inner-spin-button`), which an inline
+   `style` prop cannot target. At a compact width (a qty field next to a unit
+   pill, not a full-width form field) the native stepper eats into the space
+   the typed number needs, which is what made a value like "0.00" look
+   cramped and easy to miss. */
+.no-native-spinner::-webkit-inner-spin-button,
+.no-native-spinner::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.no-native-spinner {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* ── The PI, read as a sheet ──────────────────────────────────────────────
+ *
+ * QuotationPopup is the one PI in this product, and it stays a padded document
+ * in Purchase Orders / PI where it owns the screen. Inside a Sales Journey
+ * panel it sits beside the costing sheet, and a padded document next to a dense
+ * grid reads as two different applications — so `inline` adds `.pi-sheet` and
+ * this restyles the SAME markup into the costing sheet's idiom: hairline cells,
+ * square corners, 11px figures, inputs that are cells rather than controls.
+ *
+ * Deliberately UNLAYERED. Tailwind's utilities live in @layer, and unlayered
+ * rules beat layered ones regardless of specificity — which is the only way to
+ * override `rounded-card`/`px-3` on markup this component owns without editing
+ * a 1,200-line file that another module depends on.
+ *
+ * Nothing here changes behaviour, only how it reads. Remove the class and the
+ * original padded document is back, untouched.
+ */
+.mb-ui .pi-sheet {
+  font-size: 11px;
+}
+
+/* Cards lose their padding and radius — the grid supplies the structure. */
+.mb-ui .pi-sheet .rounded-card {
+  border-radius: 0;
+}
+.mb-ui .pi-sheet .frost-panel {
+  background-color: transparent;
+  box-shadow: inset 0 0 0 1px var(--color-hairline);
+  padding: 8px 10px;
+}
+
+/* Tables become grids: borders on the cells, not between the rows. */
+.mb-ui .pi-sheet table {
+  border-collapse: collapse;
+}
+.mb-ui .pi-sheet thead th {
+  padding: 4px 8px;
+  border: 1px solid var(--color-hairline);
+  background-color: var(--color-surface-sunken);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+.mb-ui .pi-sheet tbody td {
+  padding: 2px 8px;
+  border: 1px solid var(--color-hairline);
+  font-size: 11px;
+}
+/* `divide-y` would double up with the cell borders. */
+.mb-ui .pi-sheet .divide-y > :not([hidden]) ~ :not([hidden]) {
+  border-top-width: 0;
+}
+
+/* Inputs read as cells you type into, not as controls sitting in cells. */
+.mb-ui .pi-sheet input:not([type="checkbox"]):not([type="radio"]),
+.mb-ui .pi-sheet select,
+.mb-ui .pi-sheet textarea {
+  border-radius: 0;
+  padding: 2px 6px;
+  font-size: 11px;
+  background-color: transparent;
+  box-shadow: none;
+}
+.mb-ui .pi-sheet input:not([type="checkbox"]):not([type="radio"]):focus,
+.mb-ui .pi-sheet select:focus,
+.mb-ui .pi-sheet textarea:focus {
+  background-color: color-mix(in srgb, var(--state-risk) 10%, transparent);
+  box-shadow: inset 0 0 0 1.5px var(--color-ink);
+}
+.mb-ui .pi-sheet textarea {
+  box-shadow: inset 0 0 0 1px var(--color-hairline);
+}
+
+/* The totals block is the foot of a document, so it keeps its rule but loses
+   the card treatment around it. */
+.mb-ui .pi-sheet .w-80 {
+  padding: 8px 10px;
+  box-shadow: inset 0 0 0 1px var(--color-hairline);
+  border: 0;
+}
+
+/* Spacing, tightened for the panel.
+ *
+ * The document's own rhythm was set for a 77vw drawer; at panel width the same
+ * gaps read as holes. These collapse the utilities the component actually uses
+ * rather than editing them at ~60 call sites — and, like everything above,
+ * apply only where `.pi-sheet` is on. */
+.mb-ui .pi-sheet .p-4 { padding: 8px; }
+.mb-ui .pi-sheet .p-3 { padding: 6px 8px; }
+.mb-ui .pi-sheet .px-3 { padding-left: 8px; padding-right: 8px; }
+.mb-ui .pi-sheet .py-2 { padding-top: 2px; padding-bottom: 2px; }
+.mb-ui .pi-sheet .py-2\.5 { padding-top: 3px; padding-bottom: 3px; }
+
+.mb-ui .pi-sheet .gap-4 { gap: 8px; }
+.mb-ui .pi-sheet .gap-3 { gap: 6px; }
+.mb-ui .pi-sheet .gap-2 { gap: 5px; }
+
+.mb-ui .pi-sheet .space-y-3 > :not([hidden]) ~ :not([hidden]) { margin-top: 6px; }
+.mb-ui .pi-sheet .space-y-2\.5 > :not([hidden]) ~ :not([hidden]) { margin-top: 5px; }
+.mb-ui .pi-sheet .space-y-1\.5 > :not([hidden]) ~ :not([hidden]) { margin-top: 3px; }
+
+.mb-ui .pi-sheet .mb-3 { margin-bottom: 5px; }
+.mb-ui .pi-sheet .mb-2 { margin-bottom: 4px; }
+.mb-ui .pi-sheet .mt-2 { margin-top: 4px; }
+.mb-ui .pi-sheet .mt-4 { margin-top: 8px; }
+
+/* Section labels stop being their own line of air. */
+.mb-ui .pi-sheet h3,
+.mb-ui .pi-sheet h4 { margin-bottom: 4px; }
+
+/* The one place that must NOT tighten: a textarea still needs to be typed in. */
+.mb-ui .pi-sheet textarea { padding: 4px 6px; }

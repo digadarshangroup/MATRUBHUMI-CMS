@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- DEBUG ONLY. Overrides the release file of the same name so the app can
+         reach http://<laptop-ip>:5000 on the office wifi. -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <!-- Lets a debug build trust a proxy's certificate, which is how
+                 anybody debugs what the app is actually sending. -->
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
