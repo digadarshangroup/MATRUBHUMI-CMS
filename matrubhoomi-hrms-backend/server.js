@@ -276,6 +276,19 @@ app.use("/api/change-requests", require("./routes/Access/changeRequests"));
 // Returns names and icons only; never emails, counts or user data.
 app.use("/api/public", require("./routes/Admin/publicDepartments"));
 
+// Stored documents that are not images — leave certificates, overtime proof,
+// the employee-app APK. They live PRIVATELY in Cloudinary and are streamed
+// from here, because this account refuses public delivery of PDF and ZIP and
+// refuses ".apk" uploads outright. See routes/files.js for the full reasoning.
+// Unauthenticated by design: the HMAC in the path is the credential, exactly
+// as the unguessable CDN URL it replaced was.
+app.use("/api/files", require("./routes/files"));
+
+// The CMS frontend's one upload endpoint. The browser used to POST straight to
+// api.cloudinary.com with an unsigned preset — four helpers, three different
+// endpoints, and a write credential shipped in the bundle. See routes/uploads.js.
+app.use("/api/uploads", require("./routes/uploads"));
+
 app.use("/api/auth", require("./routes/login"));
 
 /* ─── HR ──────────────────────────────────────────────────────────────── */
@@ -308,6 +321,11 @@ app.use("/hr/reports", require("./routes/HrRoutes/Reports_section.js"));
 
 const attendanceRouter = require("./routes/HrRoutes/Attendance_section");
 app.use("/hr/attendance", attendanceRouter);
+
+// Browser push for every CMS user. The frontend (lib/pushNotifications.js) has
+// always called these three paths; until now nothing served them, so CMS push
+// silently never worked. Plain VAPID Web Push — no Firebase.
+app.use("/api/cms/notifications", require("./routes/notifications"));
 
 /* ─── Executive office ────────────────────────────────────────────────── */
 

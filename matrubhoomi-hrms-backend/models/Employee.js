@@ -441,9 +441,14 @@ const employeeSchema = new mongoose.Schema({
   lastFinalizedDate: { type: String, default: null }, // "YYYY-MM-DD", IST
 
   // ─── PUSH NOTIFICATIONS ──────────────────────────────────────────────────────
-  // Expo push token for the native mobile app (Android/iOS)
+  // Expo push token for the native mobile app (Android/iOS). One per install,
+  // so a single string is the right shape here.
+  //
+  // BROWSER push is NOT stored on this document. It used to be — one `fcmToken`
+  // string, which meant signing in on a second machine silently stopped
+  // notifications on the first. Web Push subscriptions now live in their own
+  // collection, keyed by endpoint: see models/PushSubscription.js.
   pushToken: { type: String, default: null },
-  fcmToken: { type: String, default: null },
 
   // ─── SYSTEM ──────────────────────────────────────────────────────────────────
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "HRDepartment" },

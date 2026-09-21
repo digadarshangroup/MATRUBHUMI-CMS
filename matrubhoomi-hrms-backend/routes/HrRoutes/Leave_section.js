@@ -12,7 +12,8 @@ const {
   CompanyHoliday,
 } = require("../../models/HR_Models/LeaveManagement");
 const multer = require("multer");
-const { uploadToGoogleDrive } = require("../../services/mediaUpload.service");
+const { uploadPublicFile } = require("../../services/mediaUpload.service");
+const { absoluteUrl } = require("../../utils/letterDownloadToken");
 const emailService = require("../../services/emailService");
 // Push notifications — fans out to the mobile app (Expo) and the CMS (FCM) in
 // one call. Fire-and-forget: never awaited, never able to fail a request.
@@ -1332,9 +1333,11 @@ router.post(
       );
       const fileName = `SL_${safeName}_${app.fromDate}_${Date.now()}${ext}`;
 
-      const driveResult = await uploadToGoogleDrive(req.file.buffer, {
+      const stored = await uploadPublicFile(req.file.buffer, {
         fileName,
         mimeType: req.file.mimetype,
+        folder: "matrubhoomi/leave-documents",
+        baseUrl: absoluteUrl(req, ""),
       });
 
       await LeaveApplication.updateOne(
@@ -1342,8 +1345,8 @@ router.post(
         {
           $set: {
             documentSubmitted: true,
-            documentUrl: driveResult.viewUrl || driveResult.url,
-            documentFileId: driveResult.fileId,
+            documentUrl: stored.viewUrl || stored.url,
+            documentFileId: stored.fileId,
             documentFileName: fileName,
             documentUploadedAt: new Date(),
           },
@@ -1352,9 +1355,9 @@ router.post(
 
       return res.json({
         success: true,
-        message: "Document uploaded to Google Drive.",
+        message: "Document uploaded.",
         data: {
-          documentUrl: driveResult.viewUrl || driveResult.url,
+          documentUrl: stored.viewUrl || stored.url,
           documentFileName: fileName,
         },
       });

@@ -1,18 +1,28 @@
 /**
- * utils/sendWebPush.js  (or wherever you place it in your backend)
- * Shared FCM Web Push helper — DATA-ONLY payloads.
+ * utils/sendWebPush.js
  *
- * Why data-only?
- *   If you include a `notification` object, Chrome/FCM auto-displays it
- *   BEFORE the service worker's onBackgroundMessage fires. This causes:
- *     - "You have a new notification" generic text (Chrome's fallback)
- *     - Duplicate notifications
- *     - Notifications not coming from the PWA
- *   Data-only means onBackgroundMessage is the SINGLE display controller.
+ * Employee-facing browser notifications. A thin, stable façade over
+ * utils/webPush.js — callers name an employee, not an endpoint.
+ *
+ * Previously this spoke to FCM through firebase-admin and a single `fcmToken`
+ * string on Employee. That is gone: the transport is now plain VAPID Web Push
+ * and the endpoints live in the PushSubscription collection, so a person's
+ * second browser no longer evicts their first.
+ *
+ * The exported names and signatures are unchanged, so every existing call site
+ * keeps working.
+ *
+ * Nothing here throws. A failed push must never take down the leave approval
+ * that triggered it.
  */
 
-const Employee = require("../models/Employee"); // adjust path as needed
+"use strict";
 
+const { sendToOwners } = require("./webPush");
+
+// Where a notification of each type should land when the user taps it. Every
+// branch must name a route that EXISTS — a click onto a 404 reads as a broken
+// app, which is worse than a notification that does not route.
 const URL_MAP = {
   salary_credited: "/salary",
   payslip_generated: "/salary",
@@ -32,184 +42,44 @@ function getUrl(type) {
   return URL_MAP[type] || "/dashboard";
 }
 
-/**
- * Build a DATA-ONLY FCM payload.
- * No `notification` object anywhere — SW controls display entirely.
- */
-function buildPayload({ title, body, type, url, extra = {} }) {
-  const finalUrl = url || getUrl(type);
-
-  // FCM requires all data values to be strings
-  const data = {
-    title,
-    body,
-    type: type || "general",
-    url: finalUrl,
-    timestamp: String(Date.now()),
-    ...Object.fromEntries(
-      Object.entries(extra).map(([k, v]) => [k, String(v ?? "")]),
-    ),
-  };
-
-  return {
-    // ── Data-only: SW handles display ──────────────────────────────────
-    data,
-
-    // ── Web push delivery options (no notification object!) ────────────
-    webpush: {
-      headers: { Urgency: "high", TTL: "0" },
-      // NO webpush.notification — that's what causes Chrome auto-display
-      fcmOptions: { link: finalUrl },
-    },
-
-    // ── APNs (iOS Safari 16.4+ PWA) ────────────────────────────────────
-    apns: {
-      headers: {
-        "apns-priority": "10",
-        "apns-push-type": "alert",
-        "apns-expiration": "0",
-      },
-      payload: {
-        aps: {
-          alert: { title, body },
-          badge: 1,
-          sound: "default",
-          "mutable-content": 1,
-          "content-available": 1,
-        },
-        ...data,
-      },
-    },
-
-    // ── Android native (future) ────────────────────────────────────────
-    android: {
-      priority: "high",
-      ttl: 0,
-      notification: {
-        title,
-        body,
-        icon: "ic_notification",
-        color: "#111827",
-        sound: "default",
-        channelId: "matrubhoomi_default",
-        priority: "max",
-        defaultSound: true,
-        defaultVibrateTimings: true,
-      },
-    },
-  };
-}
-
-function getMessaging() {
-  try {
-    return require("../config/firebaseAdmin").messaging;
-  } catch (e) {
-    console.error("[WEB-PUSH] Firebase Admin not configured:", e.message);
-    return null;
-  }
-}
-
-async function clearStaleToken(id) {
-  await Employee.findByIdAndUpdate(id, { $set: { fcmToken: null } }).catch(
-    () => {},
-  );
-}
-
-function isStaleError(code = "") {
-  return (
-    code.includes("not-registered") ||
-    code.includes("invalid-registration") ||
-    code.includes("third-party-auth")
-  );
-}
-
-/**
- * Send push to a single employee by MongoDB _id.
- */
+/** Send to one employee's browsers. */
 async function sendWebPush({ employeeId, title, body, type, url, extra }) {
+  if (!employeeId) return { sent: 0 };
   try {
-    const emp = await Employee.findById(employeeId)
-      .select("firstName fcmToken")
-      .lean();
-    if (!emp?.fcmToken) {
-      console.log(`[WEB-PUSH] No FCM token for ${employeeId}`);
-      return { sent: 0 };
-    }
-
-    const messaging = getMessaging();
-    if (!messaging) return { sent: 0 };
-
-    const payload = buildPayload({ title, body, type, url, extra });
-    try {
-      await messaging.send({ token: emp.fcmToken, ...payload });
-      console.log(
-        `[WEB-PUSH] ✅ Sent "${title}" to ${emp.firstName} (${type})`,
-      );
-      return { sent: 1 };
-    } catch (err) {
-      const code = err.errorInfo?.code || err.code || "";
-      console.error(`[WEB-PUSH] ✗ ${emp.firstName}: ${code}`);
-      if (isStaleError(code)) await clearStaleToken(employeeId);
-      return { sent: 0 };
-    }
+    const r = await sendToOwners({
+      ownerType: "employee",
+      ownerIds: [employeeId],
+      title,
+      body,
+      type,
+      url: url || getUrl(type),
+      extra,
+    });
+    return { sent: r.sent };
   } catch (e) {
     console.error("[WEB-PUSH] sendWebPush error:", e.message);
     return { sent: 0 };
   }
 }
 
-/**
- * Send push to multiple employees by array of MongoDB _ids.
- */
-async function sendWebPushToMany({
-  employeeIds,
-  title,
-  body,
-  type,
-  url,
-  extra,
-}) {
+/** Send to many employees' browsers in one pass. */
+async function sendWebPushToMany({ employeeIds, title, body, type, url, extra }) {
   if (!employeeIds?.length) return { sent: 0, failed: 0 };
   try {
-    const emps = await Employee.find({
-      _id: { $in: employeeIds },
-      fcmToken: { $exists: true, $nin: [null, ""] },
-    })
-      .select("firstName fcmToken")
-      .lean();
-
-    if (!emps.length) {
-      console.log(
-        `[WEB-PUSH] No FCM tokens for ${employeeIds.length} employee(s)`,
-      );
-      return { sent: 0, failed: 0 };
-    }
-
-    const messaging = getMessaging();
-    if (!messaging) return { sent: 0, failed: emps.length };
-
-    const payload = buildPayload({ title, body, type, url, extra });
-    let sent = 0,
-      failed = 0;
-
-    for (const emp of emps) {
-      try {
-        await messaging.send({ token: emp.fcmToken, ...payload });
-        console.log(`[WEB-PUSH] ✅ ${emp.firstName} (${type})`);
-        sent++;
-      } catch (err) {
-        const code = err.errorInfo?.code || err.code || "";
-        console.error(`[WEB-PUSH] ✗ ${emp.firstName}: ${code}`);
-        failed++;
-        if (isStaleError(code)) await clearStaleToken(emp._id);
-      }
-    }
-    console.log(`[WEB-PUSH] ${type} — ${sent}/${emps.length} sent`);
-    return { sent, failed };
+    const r = await sendToOwners({
+      ownerType: "employee",
+      ownerIds: employeeIds,
+      title,
+      body,
+      type,
+      url: url || getUrl(type),
+      extra,
+    });
+    return { sent: r.sent, failed: r.failed };
   } catch (e) {
     console.error("[WEB-PUSH] sendWebPushToMany error:", e.message);
     return { sent: 0, failed: 0 };
   }
 }
 
-module.exports = { sendWebPush, sendWebPushToMany };
+module.exports = { sendWebPush, sendWebPushToMany, getUrl };

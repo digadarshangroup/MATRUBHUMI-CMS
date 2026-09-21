@@ -380,18 +380,32 @@ export function ReleaseChip({ doc }) {
     );
 }
 
-/** Does this row have bytes behind it, on either storage backend? */
-export const hasFile = (file) => !!(file?.driveFileId || file?.url);
+/**
+ * Does this row have bytes behind it?
+ *
+ * Three shapes, because two migrations have passed through here and old rows
+ * are still readable:
+ *   publicId     — current. Cloudinary, stored privately, streamed by us.
+ *   driveFileId  — the Google Drive era. Unreachable now; the backend answers
+ *                  410 and asks HR to regenerate.
+ *   url          — the oldest rows, a public Cloudinary link.
+ *
+ * `publicId` MUST be first in this list: without it the Download button
+ * disappeared from every newly generated letter, because a current row has an
+ * empty driveFileId and a deliberately empty url.
+ */
+export const hasFile = (file) =>
+    !!(file?.publicId || file?.driveFileId || file?.url);
 
 /**
  * Open a stored letter in a new tab.
  *
- * Letters live in PRIVATE Google Drive now, so there is no URL to put in an
+ * Letters are stored PRIVATELY in Cloudinary, so there is no URL to put in an
  * href — the backend mints a short-lived signed one per click. The window is
  * opened FIRST and pointed afterwards: a window.open() that happens after an
  * await is no longer inside the user gesture, and every popup blocker kills
- * it. Legacy Cloudinary rows come back from the same endpoint with their
- * public URL, so this one path covers both.
+ * it. The oldest rows come back from the same endpoint with their public URL,
+ * so this one path covers both.
  */
 export async function openLetter(docId) {
     const tab = window.open("", "_blank", "noopener,noreferrer");

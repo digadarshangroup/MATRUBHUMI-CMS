@@ -2,8 +2,13 @@
 //
 // Shared push notification helper.
 // Sends notifications to BOTH:
-//   • Expo native tokens (mobile app) via Expo Push API
-//   • FCM web tokens (web app) via Firebase Admin SDK
+//   • Expo native tokens (mobile app) via the Expo Push API
+//   • Browser subscriptions (web app) via VAPID Web Push — utils/webPush.js
+//
+// There is no Firebase here. Web delivery used to go through firebase-admin
+// and a single `fcmToken` on Employee; it now goes through the
+// PushSubscription collection, so a person's browsers are all reached instead
+// of only the last one they signed in on.
 //
 // Single call from your route handlers — they don't need to know which device
 // each employee is on. The helper fans out automatically.
@@ -22,29 +27,13 @@
 
 const { Expo } = require("expo-server-sdk");
 const Employee = require("../models/Employee");
+const { sendToOwners } = require("./webPush");
 
 const expo = new Expo();
 
-// Lazy-load firebaseAdmin so this file works even before Firebase is configured
-let _messaging = null;
-function getFcmMessaging() {
-  if (_messaging !== null) return _messaging;
-  try {
-    const fb = require("../config/firebaseAdmin");
-    _messaging = fb.messaging || null;
-  } catch (e) {
-    console.warn(
-      "[SEND-PUSH] firebaseAdmin not available — web pushes disabled:",
-      e.message,
-    );
-    _messaging = false; // sentinel: don't retry
-  }
-  return _messaging;
-}
-
 /**
  * Send a push notification to one or more employees.
- * Automatically sends to BOTH mobile (Expo) and web (FCM) if both tokens exist.
+ * Automatically sends to BOTH mobile (Expo) and every registered browser.
  *
  * @param {string|string[]|ObjectId|ObjectId[]} employeeIdOrIds
  * @param {Object} opts
@@ -88,31 +77,47 @@ async function sendExpoPush(employeeIdOrIds, opts) {
   if (filteredIds.length === 0) return result;
 
   try {
-    // Fetch employees with EITHER a mobile or web token
+    // ── Web push, for every requested employee at once ─────────────────
+    //
+    // Not per-employee inside the loop below: browser subscriptions live in
+    // their own collection, so one indexed query covers the whole batch and
+    // utils/webPush.js fans the sends out in parallel. It also means someone
+    // who uses ONLY the browser — no mobile app, therefore no Expo token —
+    // still gets notified, which the old `find({ pushToken or fcmToken })`
+    // gate quietly excluded whenever their fcmToken had been cleared.
+    const web = await sendToOwners({
+      ownerType: "employee",
+      ownerIds: filteredIds,
+      title,
+      body,
+      type: data?.type || channelId || "general",
+      url,
+      extra: { ...data, ...(icon ? { icon } : {}) },
+    });
+    result.web.sent = web.sent;
+    result.web.failed = web.failed;
+
+    // ── Mobile push (Expo) ─────────────────────────────────────────────
     const employees = await Employee.find({
       _id: { $in: filteredIds },
       $and: [
         { $or: [{ status: "active" }, { isActive: true }] },
-        {
-          $or: [
-            { pushToken: { $exists: true, $nin: [null, ""] } },
-            { fcmToken: { $exists: true, $nin: [null, ""] } },
-          ],
-        },
+        { pushToken: { $exists: true, $nin: [null, ""] } },
       ],
     })
-      .select("pushToken fcmToken firstName lastName")
+      .select("pushToken firstName lastName")
       .lean();
 
     if (employees.length === 0) {
-      console.log(
-        `[SEND-PUSH] No active employees with any token for: ${filteredIds.join(", ")}`,
-      );
+      if (web.recipients === 0) {
+        console.log(
+          `[SEND-PUSH] No active employees with any device for: ${filteredIds.join(", ")}`,
+        );
+      }
       return result;
     }
 
     const invalidMobileTokenIds = [];
-    const invalidWebTokenIds = [];
 
     for (const emp of employees) {
       const name = `${emp.firstName} ${emp.lastName || ""}`.trim();
@@ -171,57 +176,6 @@ async function sendExpoPush(employeeIdOrIds, opts) {
         }
       }
 
-      // ── Web push (FCM via Firebase Admin) ──────────────────────────
-      if (emp.fcmToken) {
-        const messaging = getFcmMessaging();
-        if (!messaging) {
-          result.web.failed++;
-        } else {
-          try {
-            await messaging.send({
-              token: emp.fcmToken,
-              notification: {
-                title,
-                body,
-                ...(icon ? { imageUrl: icon } : {}),
-              },
-              data: Object.fromEntries(
-                Object.entries({ ...data, url }).map(([k, v]) => [
-                  k,
-                  String(v ?? ""),
-                ]),
-              ),
-              webpush: {
-                notification: {
-                  title,
-                  body,
-                  icon: icon || "/icon.png",
-                  badge: "/icon.png",
-                  tag: data.tag || `matrubhoomi-${Date.now()}`,
-                  requireInteraction: false,
-                },
-                fcmOptions: { link: url },
-              },
-            });
-            result.web.sent++;
-            console.log(`[SEND-PUSH] ✓ Web → ${name}: ${title}`);
-          } catch (err) {
-            result.web.failed++;
-            const code = err.errorInfo?.code || err.code || "";
-            console.warn(
-              `[SEND-PUSH] ✗ Web rejected → ${name}: ${code} ${err.message}`,
-            );
-            // Common FCM token errors we should clean up
-            if (
-              code === "messaging/registration-token-not-registered" ||
-              code === "messaging/invalid-registration-token" ||
-              code === "messaging/invalid-argument"
-            ) {
-              invalidWebTokenIds.push(emp._id);
-            }
-          }
-        }
-      }
     }
 
     // ── Cleanup bad tokens ──────────────────────────────────────────────
@@ -237,20 +191,6 @@ async function sendExpoPush(employeeIdOrIds, opts) {
       );
       result.cleanedTokens += unique.length;
       console.log(`[SEND-PUSH] Cleaned ${unique.length} bad mobile token(s)`);
-    }
-
-    if (invalidWebTokenIds.length > 0) {
-      const unique = [
-        ...new Set(invalidWebTokenIds.map((id) => id.toString())),
-      ];
-      await Employee.updateMany(
-        { _id: { $in: unique } },
-        { $set: { fcmToken: null } },
-      ).catch((e) =>
-        console.warn("[SEND-PUSH] Web token cleanup error:", e.message),
-      );
-      result.cleanedTokens += unique.length;
-      console.log(`[SEND-PUSH] Cleaned ${unique.length} bad web token(s)`);
     }
   } catch (err) {
     console.error("[SEND-PUSH] ❌ CRITICAL ERROR:", err.message);

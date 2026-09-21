@@ -59,7 +59,7 @@ const router = express.Router();
 const AllEmployeeAppMiddleware = require("../../Middlewear/AllEmployeeAppMiddleware");
 const Employee = require("../../models/Employee");
 const EmployeeDocument = require("../../models/HR_Models/EmployeeDocument");
-const { streamEmployeeLetter } = require("../../services/employeeLetterDrive.service");
+const { streamEmployeeLetter } = require("../../services/employeeLetter.service");
 const {
   mintLetterToken,
   verifyLetterToken,
@@ -391,19 +391,21 @@ router.get("/:id/file", AllEmployeeAppMiddleware, async (req, res) => {
     // One undifferentiated 404 for "no such row", "not yours" and "not
     // released". Distinguishing them would turn this into an oracle for
     // whether HR has quietly written you a warning letter.
-    if (!row || !(row.file?.driveFileId || row.file?.url)) {
+    if (!row || !(row.file?.publicId || row.file?.url)) {
       return res
         .status(404)
         .json({ success: false, message: "Document not available" });
     }
 
-    // Letters live in PRIVATE Drive: there is no URL to hand out. Mint a
-    // signed, ~10-minute, this-document-only link instead. The app opens it
-    // with Linking.openURL, which sends no Authorization header — which is
-    // exactly why the credential has to travel in the URL and expire fast.
+    // Letters are stored PRIVATELY: the Cloudinary delivery URL 401s, so
+    // there is no URL to hand out. Mint a signed, ~10-minute,
+    // this-document-only link to our own streaming route instead. The app
+    // opens it with Linking.openURL, which sends no Authorization header —
+    // which is exactly why the credential has to travel in the URL and expire
+    // fast.
     //
-    // Legacy Cloudinary rows still carry a real public URL; return it as-is.
-    const fileUrl = row.file.driveFileId
+    // The oldest rows still carry a real public URL; return it as-is.
+    const fileUrl = row.file.publicId
       ? absoluteUrl(
           req,
           `/api/employee/documents/${row._id}/download?t=${encodeURIComponent(
@@ -464,11 +466,11 @@ router.get("/:id/download", async (req, res) => {
       released: true, // ← the gate, re-checked on every byte served
     }).lean();
 
-    if (!row || !row.file?.driveFileId) {
+    if (!row || !row.file?.publicId) {
       return res.status(404).json({ success: false, message: "Document not available" });
     }
 
-    const { stream, meta } = await streamEmployeeLetter(row.file.driveFileId);
+    const { stream, meta } = await streamEmployeeLetter(row.file);
     res.setHeader("Content-Type", row.file.mimeType || meta.mimeType || "application/pdf");
     res.setHeader(
       "Content-Disposition",
@@ -476,7 +478,7 @@ router.get("/:id/download", async (req, res) => {
     );
     res.setHeader("Cache-Control", "private, no-store");
     stream.on("error", (e) => {
-      console.error("[employee/documents drive stream]", e?.message);
+      console.error("[employee/documents letter stream]", e?.message);
       if (!res.headersSent) res.status(502).end();
       else res.destroy();
     });

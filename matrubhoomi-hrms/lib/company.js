@@ -20,21 +20,29 @@
 // They print on legal documents. Set the real values — in `.env.local` for a
 // local run, in the deployment's environment for a real one — before any letter
 // is issued to an actual employee.
+//
+// ⚠ EVERY VARIABLE BELOW IS NAMED IN FULL, AS A LITERAL. Do not refactor these
+// into a `process.env[key]` lookup, however repetitive this looks.
+//
+// Next.js substitutes NEXT_PUBLIC_* variables into the CLIENT bundle at build
+// time by textually replacing `process.env.NEXT_PUBLIC_FOO`. A computed key is
+// not a text match, so it is never replaced — `process.env` is simply absent
+// in the browser and every value silently falls back. This file DID use a
+// dynamic lookup, which is why the real phone number and CIN were set in
+// .env.local and every appointment letter still printed "TO BE CONFIRMED".
 
-const env = (key, fallback) => {
-  const v = process.env[key];
-  return v && String(v).trim() ? String(v).trim() : fallback;
-};
+const pick = (value, fallback) =>
+  value && String(value).trim() ? String(value).trim() : fallback;
 
 /** Short form, for a heading or a sentence. */
-export const COMPANY_NAME = env(
-  "NEXT_PUBLIC_COMPANY_NAME",
+export const COMPANY_NAME = pick(
+  process.env.NEXT_PUBLIC_COMPANY_NAME,
   "Matrubhoomi Farms & Developers Pvt. Ltd.",
 );
 
 /** The registered name, for the top of a legal document. */
-export const COMPANY_LEGAL_NAME = env(
-  "NEXT_PUBLIC_COMPANY_LEGAL_NAME",
+export const COMPANY_LEGAL_NAME = pick(
+  process.env.NEXT_PUBLIC_COMPANY_LEGAL_NAME,
   "Matrubhoomi Farms & Developers Private Limited",
 );
 
@@ -45,23 +53,33 @@ export const COMPANY_LEGAL_NAME = env(
  * overrun into the dark bar. If the real address needs three, raise BOT_Y in
  * app/hr/dashboard/documents/letterPdf.js to match.
  */
-export const COMPANY_ADDRESS_LINES = (
-  env("NEXT_PUBLIC_COMPANY_ADDRESS", "Address — TO BE CONFIRMED|Odisha, India")
-).split("|");
+export const COMPANY_ADDRESS_LINES = pick(
+  process.env.NEXT_PUBLIC_COMPANY_ADDRESS,
+  "Address — TO BE CONFIRMED|Odisha, India",
+)
+  .split("|")
+  .map((line) => line.trim())
+  .filter(Boolean);
 
 /** Where a new employee is posted unless HR says otherwise. */
-export const COMPANY_PLACE_OF_POSTING = env(
-  "NEXT_PUBLIC_COMPANY_PLACE_OF_POSTING",
+export const COMPANY_PLACE_OF_POSTING = pick(
+  process.env.NEXT_PUBLIC_COMPANY_PLACE_OF_POSTING,
   "Odisha",
 );
 
-export const COMPANY_PHONE = env("NEXT_PUBLIC_COMPANY_PHONE", "TO BE CONFIRMED");
-export const COMPANY_CIN = env("NEXT_PUBLIC_COMPANY_CIN", "TO BE CONFIRMED");
-export const COMPANY_EMAIL = env(
-  "NEXT_PUBLIC_COMPANY_EMAIL",
+export const COMPANY_PHONE = pick(
+  process.env.NEXT_PUBLIC_COMPANY_PHONE,
+  "TO BE CONFIRMED",
+);
+export const COMPANY_CIN = pick(
+  process.env.NEXT_PUBLIC_COMPANY_CIN,
+  "TO BE CONFIRMED",
+);
+export const COMPANY_EMAIL = pick(
+  process.env.NEXT_PUBLIC_COMPANY_EMAIL,
   "hr@matrubhoomifarms.in",
 );
-export const COMPANY_WEBSITE = env("NEXT_PUBLIC_COMPANY_WEBSITE", "");
+export const COMPANY_WEBSITE = pick(process.env.NEXT_PUBLIC_COMPANY_WEBSITE, "");
 
 /**
  * The letterhead's contact strip.

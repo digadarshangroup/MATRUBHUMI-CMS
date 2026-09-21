@@ -22,8 +22,6 @@
     "exceljs": "^4.4.0",
     "expo-server-sdk": "^6.1.0",
     "express": "^5.2.1",
-    "firebase-admin": "^13.8.0",
-    "googleapis": "^171.4.0",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^8.19.3",
     "multer": "^2.0.2",

@@ -15,9 +15,10 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files — but .env.example documents every key and IS tracked
+# env files — but the *.example templates document every key and ARE tracked
 .env*
 !.env.example
+!.env.production.example
 
 /matrubhoomi-hrms-backend
 

@@ -7447,36 +7447,40 @@ async function getLeaveEmployeeIds(dateStr) {
   return new Set(apps.map((a) => String(a.employeeId)));
 }
 
+// Push first, e-mail only if the push did not land.
+//
+// TWO BUGS LIVED HERE and both failed silently, which is why HR never saw an
+// attendance alert:
+//   • `models/HR_Models/HRDepartment` does not exist — the model is at
+//     `models/HRDepartment`. The require threw straight into `catch (_) {}`.
+//   • `fcmTokens` was read off HRDepartment but never declared in its schema,
+//     so mongoose dropped every write and the array was always empty.
+// Both are gone: subscriptions live in their own collection now.
 async function notifyHR(title, body, issues, dateStr) {
   let pushOk = false;
   try {
-    const { messaging } = require("../../config/firebaseAdmin");
-    const HRDept = require("../../models/HR_Models/HRDepartment");
+    const { sendToOwners } = require("../../utils/webPush");
+    const HRDept = require("../../models/HRDepartment");
     const hrList = await HRDept.find({ isActive: { $ne: false } })
-      .select("fcmTokens")
+      .select("_id")
       .lean();
-    const tokens = hrList.flatMap((h) => h.fcmTokens || []).filter(Boolean);
-    if (tokens.length) {
-      let sent = 0;
-      for (const token of tokens) {
-        try {
-          await messaging.send({
-            token,
-            notification: { title, body },
-            webpush: {
-              notification: { title, body, icon: "/logo.png" },
-              fcmOptions: { link: "/hr/dashboard/attendance" },
-            },
-          });
-          sent++;
-        } catch (_) {}
-      }
-      pushOk = sent > 0;
+    if (hrList.length) {
+      const r = await sendToOwners({
+        ownerType: "cms",
+        ownerIds: hrList.map((h) => h._id),
+        title,
+        body,
+        type: "attendance",
+        url: "/hr/dashboard/attendance",
+      });
+      pushOk = r.sent > 0;
     }
-  } catch (_) {}
+  } catch (e) {
+    console.warn("[NOTIFY-HR] push failed:", e.message);
+  }
   if (!pushOk && issues?.length && emailService?._send) {
     try {
-      const HRDept = require("../../models/HR_Models/HRDepartment");
+      const HRDept = require("../../models/HRDepartment");
       const hrList = await HRDept.find({ isActive: { $ne: false } })
         .select("email name")
         .lean();
@@ -7808,28 +7812,29 @@ router.put(
   },
 );
 
+// Kept at this path so the attendance screen's "enable alerts" button does
+// not have to move. /api/cms/notifications/subscribe is the same thing and is
+// what lib/pushNotifications.js uses.
 router.post(
   "/notification-subscribe",
   EmployeeAuthMiddlewear,
   async (req, res) => {
     try {
-      const { fcmToken } = req.body;
-      if (!fcmToken)
+      const { subscription } = req.body || {};
+      if (!subscription?.endpoint)
         return res
           .status(400)
-          .json({ success: false, message: "fcmToken required" });
-      try {
-        const HRDept = require("../../models/HR_Models/HRDepartment");
-        const hr = await HRDept.findById(req.user.id);
-        if (hr) {
-          if (!hr.fcmTokens) hr.fcmTokens = [];
-          if (!hr.fcmTokens.includes(fcmToken)) {
-            hr.fcmTokens = [...hr.fcmTokens.slice(-4), fcmToken];
-            await hr.save();
-          }
-        }
-      } catch (_) {}
-      res.json({ success: true, message: "Token saved" });
+          .json({ success: false, message: "subscription required" });
+
+      const { saveSubscription } = require("../../utils/webPush");
+      await saveSubscription({
+        ownerType: "cms",
+        ownerId: req.user.id,
+        subscription,
+        userAgent: req.headers["user-agent"] || "",
+      });
+
+      res.json({ success: true, message: "Subscribed" });
     } catch (e) {
       res.status(500).json({ success: false, message: e.message });
     }
@@ -7838,36 +7843,32 @@ router.post(
 
 router.post("/notification-test", EmployeeAuthMiddlewear, async (req, res) => {
   try {
-    const { messaging } = require("../../config/firebaseAdmin");
-    const HRDept = require("../../models/HR_Models/HRDepartment");
-    const hr = await HRDept.findById(req.user.id).select("fcmTokens").lean();
-    const tokens = hr?.fcmTokens || [];
-    if (!tokens.length)
+    const { sendToOwners, isConfigured } = require("../../utils/webPush");
+    if (!isConfigured())
       return res.json({
         success: false,
-        message: "No push tokens registered. Enable notifications first.",
+        message: "Push is not configured on this server.",
       });
-    let sent = 0;
-    for (const token of tokens) {
-      try {
-        await messaging.send({
-          token,
-          notification: {
-            title: "✅ HRMS Alerts Active",
-            body: "Punch notifications are working!",
-          },
-          webpush: {
-            notification: {
-              title: "✅ HRMS Alerts Active",
-              body: "Punch notifications are working!",
-              icon: "/logo.png",
-            },
-          },
-        });
-        sent++;
-      } catch (_) {}
-    }
-    res.json({ success: true, message: `Test sent to ${sent} device(s)` });
+
+    const r = await sendToOwners({
+      ownerType: "cms",
+      ownerIds: [req.user.id],
+      title: "✅ HRMS Alerts Active",
+      body: "Punch notifications are working!",
+      type: "attendance",
+      url: "/hr/dashboard/attendance",
+    });
+
+    if (r.recipients === 0)
+      return res.json({
+        success: false,
+        message: "No browser is subscribed. Enable notifications first.",
+      });
+
+    res.json({
+      success: r.sent > 0,
+      message: `Test sent to ${r.sent} of ${r.recipients} device(s)`,
+    });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message });
   }

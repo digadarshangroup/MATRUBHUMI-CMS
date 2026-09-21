@@ -1,183 +1,140 @@
 /**
- * MATRUBHOOMI-HRMS-BACKEND/services/employeeLetterDrive.service.js
+ * MATRUBHOOMI-HRMS-BACKEND/services/employeeLetter.service.js
  *
- * PRIVATE Google Drive storage for HR-issued employee letters (appointment,
- * offer, warning, experience, relieving, salary certificate).
+ * PRIVATE storage for HR-issued employee letters (appointment, offer,
+ * warning, experience, relieving, salary certificate).
  *
- * WHY THIS EXISTS AT ALL, rather than utils/cloudinary.js:
+ * WHAT CHANGED, and why the file is no longer called *Drive*:
  *
- *   1. Cloudinary is not configured on this deployment — there is no
- *      CLOUDINARY_CLOUD_NAME / _API_KEY / _API_SECRET in .env, so every
- *      uploadFileBuffer() call rejected and the whole Generate action failed
- *      with a bare "Could not save the document". GOOGLE_SERVICE_ACCOUNT_KEY
- *      and GOOGLE_DRIVE_FOLDER_ID are both set and already in use.
+ *   These letters lived on a private Google Drive folder for one reason — a
+ *   normal Cloudinary `secure_url` is PUBLIC AND PERMANENT, which would have
+ *   made the release gate a discovery gate only: anyone who once held the URL
+ *   kept it after the letter was withdrawn.
  *
- *   2. Cloudinary's secure_url is PUBLIC AND PERMANENT. That made the release
- *      gate a discovery gate only: anyone who once held the URL kept it after
- *      the letter was withdrawn. These files are private — there is no
- *      drive.permissions.create({ type: "anyone" }) call anywhere below — and
- *      every read is streamed through our own route, which re-checks the gate
- *      on each request. Withdrawing a letter now actually withdraws it.
+ *   Cloudinary's `type: "private"` closes that hole, but not in the way the
+ *   name suggests, and the difference matters. The `secure_url` a private
+ *   upload returns ALREADY CARRIES a working signature and serves 200 to
+ *   anyone who has it — probed, not assumed. What makes these letters private
+ *   is therefore a rule, not a Cloudinary feature: THAT URL NEVER LEAVES THE
+ *   SERVER. The row stores only a publicId (`url` is deliberately ""), and
+ *   bytes come out solely through a signed download URL minted per request,
+ *   valid for CLOUDINARY_PRIVATE_URL_TTL_S seconds, behind a route that
+ *   re-checks the release gate first. Withdrawing a letter genuinely
+ *   withdraws it.
  *
- * Modelled directly on services/voucherDriveUpload.service.js, which does the
- * same thing for accountant voucher attachments. It is deliberately a separate
- * file rather than a shared one: services/mediaUpload.service.js makes its
- * uploads PUBLIC for shared attachments, and one accidental import of the wrong
- * helper would quietly publish everybody's warning letters.
+ *   So the second storage backend earns nothing any more, and it cost a
+ *   service-account key that was never actually filled in — every Generate
+ *   here failed with "GOOGLE_SERVICE_ACCOUNT_KEY is not set in .env".
  *
- * Env:
- *   GOOGLE_SERVICE_ACCOUNT_KEY          service-account JSON on one line
- *   GOOGLE_DRIVE_FOLDER_ID              optional parent (Shared Drive)
- *   GOOGLE_DRIVE_LETTERS_FOLDER_ID      optional: pin the letters folder
+ * The exported names and the returned sub-document shape are unchanged, so
+ * routes/HrRoutes/EmployeeDocuments_section.js and
+ * routes/Employee_Routes/documents.js keep working. Rows written before this
+ * change carry `storage: "drive"` and a `driveFileId`; they are read-only
+ * history and the read paths below say plainly that they cannot be served.
+ *
+ * Env: CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET
  */
 
-const { google } = require("googleapis");
-const { Readable } = require("stream");
+const {
+  uploadPrivateFile,
+  getPrivateFileStream,
+  deleteFile,
+} = require("./mediaUpload.service");
 
-// ── Service-account auth (never expires) ─────────────────────────────────────
-function getServiceAccountAuth() {
-  const keyJson = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
-  if (!keyJson) throw new Error("GOOGLE_SERVICE_ACCOUNT_KEY is not set in .env");
-
-  let key;
-  try {
-    key = JSON.parse(keyJson);
-  } catch (e) {
-    throw new Error("GOOGLE_SERVICE_ACCOUNT_KEY is not valid JSON: " + e.message);
-  }
-
-  // dotenv stores the private key with literal "\n"; convert to real newlines.
-  if (key.private_key) key.private_key = key.private_key.replace(/\\n/g, "\n");
-
-  return new google.auth.GoogleAuth({
-    credentials: { client_email: key.client_email, private_key: key.private_key },
-    scopes: ["https://www.googleapis.com/auth/drive"],
-  });
-}
-
-const LETTERS_FOLDER_NAME = "Employee Letters";
-let _lettersFolderIdCache = null;
+// One flat folder stays searchable in the Cloudinary media library, and HR
+// does look these up by hand. The letter type is folded into the FILENAME
+// rather than nesting a folder per type.
+const LETTERS_FOLDER = "matrubhoomi/employee-letters";
 
 /**
- * Find (or create) the letters folder.
- * Priority: explicit env override → search by name → create under
- * GOOGLE_DRIVE_FOLDER_ID (or the Drive root when that is unset).
- */
-async function getOrCreateLettersFolder(drive) {
-  if (process.env.GOOGLE_DRIVE_LETTERS_FOLDER_ID) {
-    return process.env.GOOGLE_DRIVE_LETTERS_FOLDER_ID;
-  }
-
-  const safeName = LETTERS_FOLDER_NAME.replace(/'/g, "\\'");
-  try {
-    const search = await drive.files.list({
-      q: `name='${safeName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-      fields: "files(id, name)",
-      supportsAllDrives: true,
-      includeItemsFromAllDrives: true,
-    });
-    if (search.data.files?.length) return search.data.files[0].id;
-  } catch (e) {
-    console.warn("[letter-drive] folder search failed:", e.message);
-  }
-
-  const parentId = process.env.GOOGLE_DRIVE_FOLDER_ID || null;
-  const folder = await drive.files.create({
-    supportsAllDrives: true,
-    requestBody: {
-      name: LETTERS_FOLDER_NAME,
-      mimeType: "application/vnd.google-apps.folder",
-      parents: parentId ? [parentId] : [],
-    },
-    fields: "id",
-  });
-  return folder.data.id;
-}
-
-/**
- * Upload a letter PDF. PRIVATE — no permissions are granted to anyone.
+ * Upload a letter PDF. PRIVATE — no readable URL is returned or stored.
  * Returns the sub-document stored on EmployeeDocument.file.
  */
 async function uploadEmployeeLetter(
   buffer,
   { fileName = "letter.pdf", mimeType = "application/pdf", subfolder = "" } = {},
 ) {
-  const auth = getServiceAccountAuth();
-  const drive = google.drive({ version: "v3", auth });
+  const name = subfolder ? `${subfolder} - ${fileName}` : fileName;
 
-  if (!_lettersFolderIdCache) {
-    _lettersFolderIdCache = await getOrCreateLettersFolder(drive);
-  }
-
-  const readable = new Readable();
-  readable._read = () => {};
-  readable.push(buffer);
-  readable.push(null);
-
-  const response = await drive.files.create({
-    supportsAllDrives: true,
-    requestBody: {
-      // The letter type is folded into the name rather than nesting a folder
-      // per type: one flat folder stays searchable in the Drive UI, and HR
-      // does look these up by hand.
-      name: subfolder ? `${subfolder} - ${fileName}` : fileName,
-      mimeType,
-      parents: _lettersFolderIdCache ? [_lettersFolderIdCache] : [],
-    },
-    media: { mimeType, body: readable },
-    fields: "id, name, mimeType, size",
+  const up = await uploadPrivateFile(buffer, {
+    fileName: name,
+    mimeType,
+    folder: LETTERS_FOLDER,
   });
 
-  // IMPORTANT: no drive.permissions.create() — the file stays PRIVATE.
-
   return {
-    driveFileId: response.data.id,
-    storage: "drive",
-    url: "", // no public URL exists, and none should
-    publicId: "",
-    fileName: response.data.name || fileName,
-    mimeType: response.data.mimeType || mimeType,
-    bytes: response.data.size ? Number(response.data.size) : buffer.length,
-    resourceType: "raw",
+    storage: "cloudinary",
+    deliveryType: "private",
+    publicId: up.publicId,
+    driveFileId: "", // legacy column; nothing writes it any more
+    url: "", // MUST stay empty — a stored URL would be a permanent back door
+    fileName: name,
+    mimeType,
+    bytes: up.bytes || buffer.length,
+    resourceType: up.resourceType || "raw",
   };
 }
 
-/** Stream a private letter back through our own authenticated route. */
-async function streamEmployeeLetter(driveFileId) {
-  const auth = getServiceAccountAuth();
-  const drive = google.drive({ version: "v3", auth });
+/**
+ * Stream a private letter back through our own authenticated route.
+ *
+ * Accepts either the stored `file` sub-document or a bare Cloudinary
+ * public_id, so callers that already hold the row do not have to unpack it.
+ */
+async function streamEmployeeLetter(fileOrPublicId) {
+  const file =
+    typeof fileOrPublicId === "string"
+      ? { publicId: fileOrPublicId, resourceType: "raw" }
+      : fileOrPublicId || {};
 
-  const meta = await drive.files.get({
-    fileId: driveFileId,
-    fields: "id, name, mimeType, size",
-    supportsAllDrives: true,
+  if (!file.publicId && file.driveFileId) {
+    // A row written before the move. The Drive credentials it needs are gone,
+    // so say so instead of throwing a nil-reference three frames down.
+    const err = new Error(
+      "This letter was stored on Google Drive before the move to Cloudinary and can no longer be served. Regenerate it.",
+    );
+    err.statusCode = 410;
+    throw err;
+  }
+  if (!file.publicId) {
+    const err = new Error("No stored file for this document");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const { stream, mimeType, size } = await getPrivateFileStream(file.publicId, {
+    resourceType: file.resourceType || "raw",
   });
 
-  const resp = await drive.files.get(
-    { fileId: driveFileId, alt: "media", supportsAllDrives: true },
-    { responseType: "stream" },
-  );
-
   return {
-    stream: resp.data,
+    stream,
     meta: {
-      name: meta.data.name,
-      mimeType: meta.data.mimeType,
-      size: meta.data.size ? Number(meta.data.size) : undefined,
+      name: file.fileName || "document.pdf",
+      mimeType: file.mimeType || mimeType,
+      size: file.bytes || size || undefined,
     },
   };
 }
 
 /**
  * Delete, best-effort.
- * An orphaned Drive file is far better than a failed replacement, so callers
- * warn rather than throw — same posture as the Cloudinary path it replaces.
+ * An orphaned asset is far better than a failed replacement, so callers warn
+ * rather than throw.
  */
-async function deleteEmployeeLetter(driveFileId) {
-  if (!driveFileId) return false;
-  const auth = getServiceAccountAuth();
-  const drive = google.drive({ version: "v3", auth });
-  await drive.files.delete({ fileId: driveFileId, supportsAllDrives: true });
+async function deleteEmployeeLetter(fileOrPublicId) {
+  const file =
+    typeof fileOrPublicId === "string"
+      ? { publicId: fileOrPublicId, resourceType: "raw" }
+      : fileOrPublicId || {};
+
+  if (!file.publicId) return false;
+
+  await deleteFile(file.publicId, {
+    resourceType: file.resourceType || "raw",
+    // Must match the upload. Destroying a private asset as type "upload"
+    // reports { result: "not found" } and silently leaves the file in place.
+    type: file.deliveryType || "private",
+  });
   return true;
 }
 
@@ -185,4 +142,5 @@ module.exports = {
   uploadEmployeeLetter,
   streamEmployeeLetter,
   deleteEmployeeLetter,
+  LETTERS_FOLDER,
 };

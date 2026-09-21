@@ -155,38 +155,43 @@ const employeeDocumentSchema = new mongoose.Schema(
 
     // NEVER projected to an employee unless `released === true`.
     //
-    // Storage: Cloudinary `raw`, uploaded by the BACKEND from a multer memory
-    // buffer — never by the browser, or a client could inject an arbitrary URL
-    // into an employee-visible record. `resource_type` is "raw", not "auto":
-    // `auto` classifies a PDF as `image`, which Cloudinary's default PDF
-    // delivery restriction then blocks.
+    // Storage: Cloudinary `raw`, delivery type "private", uploaded by the
+    // BACKEND from a multer memory buffer — never by the browser, or a client
+    // could inject an arbitrary URL into an employee-visible record.
+    // `resource_type` is "raw", not "auto": `auto` classifies a PDF as `image`,
+    // which Cloudinary's PDF delivery restriction then blocks.
     //
-    // ACCEPTED LIMITATION: a Cloudinary secure_url is public and permanent.
-    // The release gate is therefore a DISCOVERY gate — an unreleased
-    // document's URL appears in no employee-facing response, and a revoked
-    // document's URL disappears again, but anyone who already captured the URL
-    // keeps it. Making revocation cryptographically real needs the
-    // Drive-stream pattern (services/mediaUpload.service.js →
-    // getDriveFileStream) and is out of scope for v1. Do not silently switch
-    // providers.
+    // REVOCATION IS REAL, and it rests on `url` staying EMPTY. A private raw
+    // asset's secure_url already carries a working signature, so the privacy
+    // comes from that URL never leaving the server — not from Cloudinary
+    // refusing it. Bytes reach an employee only through a short-lived signed
+    // URL minted per request, behind a route that re-checks the release gate
+    // first. Withdrawing a letter therefore actually withdraws it.
     file: {
       // ── Where the bytes actually live ────────────────────────────────────
-      // "drive" is the only thing written now: the letter goes to a PRIVATE
-      // Google Drive folder and is streamed back through our own route, so
-      // withdrawing a letter genuinely withdraws it.
+      // "cloudinary" is the only thing written now.
       //
-      // "cloudinary" exists for rows written before that change. Those carry a
-      // PUBLIC, PERMANENT secure_url in `url`, which is exactly the weakness
-      // the move to Drive fixes — anyone who once held the link keeps it. Read
-      // paths must handle both; write paths must only ever produce "drive".
+      // "drive" exists for rows written while HR letters lived on a private
+      // Google Drive folder. Those bytes are no longer reachable — the Drive
+      // credentials are gone — so the read paths report 410 and ask HR to
+      // regenerate. Write paths must only ever produce "cloudinary".
       storage: {
         type: String,
         enum: ["drive", "cloudinary"],
-        default: "drive",
+        default: "cloudinary",
       },
-      driveFileId: { type: String, default: "" }, // storage === "drive"
-      url: { type: String, default: "" }, // legacy Cloudinary secure_url only
-      publicId: { type: String, default: "" }, // legacy Cloudinary public_id
+      // "private" → signed-URL delivery, server-side only (everything written
+      // now). "upload" → the oldest rows, whose secure_url is PUBLIC and
+      // PERMANENT: for those the release gate is a discovery gate only, which
+      // is exactly the weakness private delivery closes.
+      deliveryType: {
+        type: String,
+        enum: ["private", "authenticated", "upload"],
+        default: "private",
+      },
+      publicId: { type: String, default: "" }, // storage === "cloudinary"
+      driveFileId: { type: String, default: "" }, // legacy Drive rows only
+      url: { type: String, default: "" }, // legacy PUBLIC secure_url only
       fileName: { type: String, default: "" }, // e.g. "Appointment letter - GR0067.pdf"
       mimeType: { type: String, default: "application/pdf" },
       bytes: { type: Number, default: 0 },

@@ -815,36 +815,24 @@ function NotificationPrefsPanel() {
     saveSettings(u);
   };
 
+  // Standard VAPID Web Push, via lib/pushNotifications.js. This used to pull
+  // in the Firebase SDK and register /firebase-messaging-sw.js — with a config
+  // whose every field came from an empty NEXT_PUBLIC_FIREBASE_* variable, so
+  // `initializeApp({})` threw and the button never did anything.
   const enablePush = async () => {
     setSubscribing(true);
     try {
-      const perm = await Notification.requestPermission();
-      setPushStatus(perm);
-      if (perm !== "granted") return;
-      const { initializeApp, getApps } = await import("firebase/app");
-      const { getMessaging, getToken } = await import("firebase/messaging");
-      const app = getApps().length
-        ? getApps()[0]
-        : initializeApp({
-            apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-            authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-            projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-            messagingSenderId:
-              process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-            appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-          });
-      const sw = await navigator.serviceWorker.register(
-        "/firebase-messaging-sw.js",
+      const { initPushNotifications } = await import("@/lib/pushNotifications");
+      const res = await initPushNotifications();
+      setPushStatus(
+        res.ok
+          ? "granted"
+          : res.reason === "denied"
+            ? "denied"
+            : (typeof Notification !== "undefined" && Notification.permission) ||
+              "default",
       );
-      const token = await getToken(getMessaging(app), {
-        vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
-        serviceWorkerRegistration: sw,
-      });
-      if (token)
-        await apiFetch("/api/hr/attendance/notification-subscribe", {
-          method: "POST",
-          body: JSON.stringify({ fcmToken: token }),
-        });
+      if (!res.ok) console.warn("Push enable:", res.reason);
     } catch (e) {
       console.error("Push enable:", e.message);
     } finally {

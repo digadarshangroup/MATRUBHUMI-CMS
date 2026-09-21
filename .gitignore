@@ -29,7 +29,6 @@ build/
 keystore.properties
 local.properties
 serviceAccount*.json
-firebase-adminsdk*.json
 google-services.json
 
 # ===============================

@@ -28,9 +28,9 @@
 // credentials that survive a blocked cookie.
 //
 // ─── WHAT IT DELIBERATELY DOES NOT TOUCH ──────────────────────────────────────
-//   • Requests to anywhere other than NEXT_PUBLIC_API_URL — Cloudinary, Google,
-//     Firebase, the app's own /api routes. Leaking a session token to a third
-//     party would be a far worse bug than the one being fixed.
+//   • Requests to anywhere other than NEXT_PUBLIC_API_URL — map tiles, the
+//     app's own /api routes, anything third-party. Leaking a session token to
+//     a third party would be a far worse bug than the one being fixed.
 //   • /api/accountant/* — that module carries its OWN token (localStorage
 //     "acc_token", sent by lib/api.js). Sending the CMS token there is exactly
 //     what once made an Owner's sidebar read the department role instead of

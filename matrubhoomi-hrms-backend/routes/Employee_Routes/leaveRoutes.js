@@ -16,7 +16,8 @@ const {
   notifyLeaveEdited,
   notifyEmployee,
 } = require("../../utils/notifyEmployee");
-const { uploadToGoogleDrive } = require("../../services/mediaUpload.service");
+const { uploadPublicFile } = require("../../services/mediaUpload.service");
+const { absoluteUrl } = require("../../utils/letterDownloadToken");
 // Derived (never stored) reservation held by pending / manager_approved
 // applications. See utils/leaveReserve.js for why this is not a schema field.
 const { computeReserved } = require("../../utils/leaveReserve");
@@ -2116,9 +2117,11 @@ router.post(
           .status(400)
           .json({ success: false, message: "No doc needed" });
       const fn = `SL_${a.employeeName}_${a.fromDate}_${Date.now()}${req.file.originalname.includes(".") ? req.file.originalname.slice(req.file.originalname.lastIndexOf(".")) : ".pdf"}`;
-      const dr = await uploadToGoogleDrive(req.file.buffer, {
+      const dr = await uploadPublicFile(req.file.buffer, {
         fileName: fn,
         mimeType: req.file.mimetype,
+        folder: "matrubhoomi/leave-documents",
+        baseUrl: absoluteUrl(req, ""),
       });
       a.documentSubmitted = true;
       a.documentUrl = dr.viewUrl;

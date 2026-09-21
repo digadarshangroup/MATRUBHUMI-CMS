@@ -38,41 +38,20 @@ import {
   PageHead,
 } from "@/components/ceo/ui/Primitives";
 
+import { uploadFileToCloudinary } from "@/lib/cloudinaryUpload";
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
 
-// Simplified Cloudinary upload function
-const uploadToCloudinary = async (file) => {
-  try {
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append(
-      "upload_preset",
-      process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET,
-    ); // Use your existing preset
-
-    const response = await fetch(
-      `https://api.cloudinary.com/v1_1/${process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME}/upload`,
-      {
-        method: "POST",
-        body: formData,
-      },
-    );
-
-    const data = await response.json();
-
-    if (data.error) {
-      throw new Error(data.error.message || "Upload failed");
-    }
-
-    return {
-      url: data.secure_url,
-      publicId: data.public_id,
-    };
-  } catch (error) {
-    console.error("Cloudinary upload error:", error);
-    throw new Error("Failed to upload file");
-  }
-};
+// Uploads go through lib/cloudinaryUpload.js, which posts to the backend.
+//
+// This screen used to carry its OWN copy that POSTed to
+// `api.cloudinary.com/v1_1/<cloud>/upload` — note the missing resource_type
+// segment, which makes Cloudinary treat the file as an IMAGE. Résumés here are
+// PDFs and DOCXs, and on this account a PDF stored that way cannot be
+// delivered at all: the upload reported success and every résumé link then
+// opened to a 401.
+const uploadToCloudinary = (file, folder = "candidate-documents") =>
+  uploadFileToCloudinary(file, folder);
 
 // Function to get default avatar
 const getDefaultAvatar = (name) => {

@@ -40,7 +40,7 @@
  * ═══════════════════════════════════════════════════════════════════════════
  *  STORAGE — PRIVATE Google Drive, uploaded BY THE BACKEND
  * ═══════════════════════════════════════════════════════════════════════════
- * multer memoryStorage → services/employeeLetterDrive.service.js.
+ * multer memoryStorage → services/employeeLetter.service.js.
  *
  * The browser NEVER uploads and posts back a URL. If it did, a client could
  * inject an arbitrary URL into a record the employee is told to trust.
@@ -96,12 +96,11 @@ const multer = require("multer");
 const EmployeeAuthMiddleware = require("../../Middlewear/EmployeeAuthMiddlewear");
 const Employee = require("../../models/Employee");
 const { decryptEmployeeDoc } = require("../../utils/salaryEncryption");
-const { cloudinary } = require("../../utils/cloudinary"); // legacy rows only
 const {
   uploadEmployeeLetter,
   streamEmployeeLetter,
   deleteEmployeeLetter,
-} = require("../../services/employeeLetterDrive.service");
+} = require("../../services/employeeLetter.service");
 const {
   mintLetterToken,
   verifyLetterToken,
@@ -269,15 +268,15 @@ async function uploadLetter(file, type) {
     mimeType: file.mimetype || "application/pdf",
     subfolder: TYPE_LABEL[type] || type,
   });
-  if (!up?.driveFileId) throw new Error("Upload failed");
+  if (!up?.publicId) throw new Error("Upload failed");
   return {
     ...up,
     bytes: file.size || up.bytes || 0,
   };
 }
 
-/** Does this row actually have bytes behind it, on either storage backend? */
-const hasFile = (file) => !!(file?.driveFileId || file?.url);
+/** Does this row actually have bytes behind it, in any of the three shapes? */
+const hasFile = (file) => !!(file?.publicId || file?.driveFileId || file?.url);
 
 /**
  * Destroy the stored bytes, warn-only, on whichever backend holds them.
@@ -288,17 +287,17 @@ const hasFile = (file) => !!(file?.driveFileId || file?.url);
 async function destroyStored(file) {
   if (!file) return;
   try {
-    if (file.driveFileId) {
-      await deleteEmployeeLetter(file.driveFileId);
+    if (file.publicId) {
+      // deleteEmployeeLetter reads `deliveryType` off the row, because
+      // destroying an "authenticated" asset as type "upload" reports
+      // { result: "not found" } and silently leaves the file in place.
+      await deleteEmployeeLetter(file);
       return;
     }
-    // Legacy Cloudinary rows. resource_type MUST be "raw" — utils/cloudinary
-    // `deleteImage` defaults to "image" and silently no-ops on these.
-    if (file.publicId) {
-      await cloudinary.uploader.destroy(file.publicId, { resource_type: "raw" });
-    }
+    // Rows from the Google Drive era. Those bytes are already unreachable —
+    // the credentials are gone — so there is nothing left to destroy.
   } catch (e) {
-    console.warn("[HR-DOCUMENTS] stored-file destroy failed:", file.driveFileId || file.publicId, e?.message);
+    console.warn("[HR-DOCUMENTS] stored-file destroy failed:", file.publicId || file.driveFileId, e?.message);
   }
 }
 
@@ -411,11 +410,11 @@ router.get("/:id/download", async (req, res) => {
     }
 
     const row = await EmployeeDocument.findById(req.params.id).select("file title type").lean();
-    if (!row || !row.file?.driveFileId) {
+    if (!row || !row.file?.publicId) {
       return res.status(404).json({ success: false, message: "Document not available" });
     }
 
-    const { stream, meta } = await streamEmployeeLetter(row.file.driveFileId);
+    const { stream, meta } = await streamEmployeeLetter(row.file);
     res.setHeader("Content-Type", row.file.mimeType || meta.mimeType || "application/pdf");
     // `inline` so it opens in the browser's PDF viewer rather than downloading
     // — HR is checking the letter, not filing it.
@@ -425,7 +424,7 @@ router.get("/:id/download", async (req, res) => {
     );
     res.setHeader("Cache-Control", "private, no-store");
     stream.on("error", (e) => {
-      console.error("[HR-DOCUMENTS] drive stream error:", e?.message);
+      console.error("[HR-DOCUMENTS] letter stream error:", e?.message);
       if (!res.headersSent) res.status(502).end();
       else res.destroy();
     });
@@ -1139,9 +1138,9 @@ router.get("/:id/link", async (req, res) => {
         .status(404)
         .json({ success: false, message: "No file on this document" });
 
-    // Legacy Cloudinary rows keep working: their URL is already public, and
-    // there is nothing to stream.
-    if (!row.file.driveFileId && row.file.url) {
+    // The oldest rows hold a PUBLIC Cloudinary secure_url and no publicId to
+    // sign. Nothing to stream — hand back the link they already have.
+    if (!row.file.publicId && row.file.url) {
       return res.json({ success: true, data: { url: row.file.url, legacy: true } });
     }
 

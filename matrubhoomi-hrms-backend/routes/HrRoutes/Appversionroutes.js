@@ -4,7 +4,8 @@ const router = express.Router();
 const multer = require("multer");
 const AppVersion = require("../../models/Appversion");
 const EmployeeAuthMiddleware = require("../../Middlewear/EmployeeAuthMiddlewear");
-const { uploadToGoogleDrive } = require("../../services/mediaUpload.service");
+const { uploadPublicFile } = require("../../services/mediaUpload.service");
+const { absoluteUrl } = require("../../utils/letterDownloadToken");
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -73,10 +74,13 @@ router.post(
 
       const fileName = `Matrubhoomi_CRM_v${version}_${Date.now()}.apk`;
 
-      // Upload to Google Drive
-      const driveResult = await uploadToGoogleDrive(req.file.buffer, {
+      // Cloudinary, resource_type "raw" — an APK is not an image and must
+      // come back byte-identical or it will not install.
+      const stored = await uploadPublicFile(req.file.buffer, {
         fileName,
         mimeType: "application/vnd.android.package-archive",
+        folder: "matrubhoomi/app-releases",
+        baseUrl: absoluteUrl(req, ""),
       });
 
       // Unmark previous latest
@@ -90,11 +94,11 @@ router.post(
         version,
         fileName,
         fileSize: req.file.size,
-        driveFileId: driveResult.fileId,
-        driveViewUrl: driveResult.viewUrl || driveResult.url,
-        driveDownloadUrl:
-          driveResult.downloadUrl ||
-          `https://drive.google.com/uc?export=download&id=${driveResult.fileId}`,
+        // Column names kept from the Drive era so existing rows still read.
+        // They now hold a Cloudinary public_id and CDN URLs.
+        driveFileId: stored.fileId,
+        driveViewUrl: stored.viewUrl || stored.url,
+        driveDownloadUrl: stored.downloadUrl || stored.url,
         releaseNotes: releaseNotes || "",
         isLatest: true,
         uploadedBy: req.user?.id,
@@ -102,7 +106,7 @@ router.post(
       });
 
       console.log(
-        `[APP-UPLOAD] v${version} uploaded by ${req.user?.name || "HR"} → ${driveResult.fileId}`,
+        `[APP-UPLOAD] v${version} uploaded by ${req.user?.name || "HR"} → ${stored.fileId}`,
       );
       res.json({
         success: true,

@@ -2,9 +2,9 @@
  * public/sw.js
  * Web-push service worker.
  *
- * Registered from lib/pushNotifications.js at sign-in. Separate from
- * firebase-messaging-sw.js, which handles FCM; this one handles the VAPID
- * web-push subscription.
+ * Registered from lib/pushNotifications.js at sign-in. The ONLY service
+ * worker this app has — firebase-messaging-sw.js and the FCM transport behind
+ * it are gone.
  *
  * Features:
  *  - Rich notifications: icon, badge, image, action buttons

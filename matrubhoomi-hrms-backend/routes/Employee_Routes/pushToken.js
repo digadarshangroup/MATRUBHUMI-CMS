@@ -1,114 +1,101 @@
-// routes/Employee_Routes/pushToken.js
+// routes/Employee_Routes/pushToken.js  →  mounted at /api/employee
 //
-// Handles BOTH push token types in a single route:
-//   • Mobile: Expo push tokens (ExponentPushToken[...])  → stored in `pushToken`
-//   • Web:    FCM web tokens (long opaque strings)        → stored in `fcmToken`
+// Device registration for the employee self-service portal and the mobile app.
 //
-// Frontend sends either:
-//   POST /push-token  { pushToken: "ExponentPushToken[...]" }                  // mobile (legacy)
-//   POST /push-token  { fcmToken: "...", platform: "web" }                     // web
-//   POST /push-token  { token: "...", platform: "web" | "mobile" }             // unified
+// Two transports, two shapes:
 //
-// Logout (DELETE) accepts:
-//   DELETE /push-token                        → clears BOTH tokens (when platform unknown)
-//   DELETE /push-token?platform=web           → clears ONLY fcmToken (web logout)
-//   DELETE /push-token?platform=mobile        → clears ONLY pushToken (mobile logout)
+//   • MOBILE — an Expo push token (`ExponentPushToken[...]`), one per install,
+//     stored on Employee.pushToken. Unchanged.
+//
+//   • WEB — a standard Web Push subscription object from
+//     PushManager.subscribe(), stored as its own PushSubscription row so a
+//     person can have several browsers at once. This replaces the old single
+//     `fcmToken` string and the Firebase Cloud Messaging transport behind it.
+//
+// Routes:
+//   POST   /push-token              { pushToken } | { token, platform:"mobile" }
+//   DELETE /push-token[?platform=]  clear the Expo token on logout
+//   POST   /push-subscription       { subscription }   web, on sign-in
+//   DELETE /push-subscription       { endpoint }       web, on sign-out
+//   GET    /push-token/debug        what this user has registered
+//   POST   /test-web-push           send one to the caller's own browsers
 
 const express = require("express");
 const router = express.Router();
 const Employee = require("../../models/Employee");
+const PushSubscription = require("../../models/PushSubscription");
 const AllEmployeeAppMiddleware = require("../../Middlewear/AllEmployeeAppMiddleware");
 const EmployeeAuthMiddleware = require("../../Middlewear/EmployeeAuthMiddlewear");
+const {
+  isConfigured,
+  getPublicKey,
+  saveSubscription,
+  removeSubscription,
+  sendToOwners,
+} = require("../../utils/webPush");
 
 // ═══════════════════════════════════════════════════════════════════════════
-// POST /push-token  — register a device token (mobile or web)
+// GET /push-public-key — the app's browser half needs this to subscribe
+// ═══════════════════════════════════════════════════════════════════════════
+router.get("/push-public-key", (_req, res) => {
+  if (!isConfigured()) {
+    return res.json({ success: false, message: "Push is not configured." });
+  }
+  res.json({ success: true, publicKey: getPublicKey() });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// POST /push-token — register the MOBILE (Expo) token
+//
+// A web caller that still posts { fcmToken } gets a clear 400 rather than a
+// silent success: there is no FCM any more, and an app version that keeps
+// sending one should be told, not humoured.
 // ═══════════════════════════════════════════════════════════════════════════
 router.post("/push-token", AllEmployeeAppMiddleware, async (req, res) => {
   try {
     const { pushToken, fcmToken, token, platform } = req.body;
 
-    // Decide which kind of token this is
-    // Priority: explicit pushToken/fcmToken fields, then `token` + platform hint
-    let isWeb = false;
-    let isMobile = false;
-    let tokenValue = null;
-
-    if (pushToken) {
-      // Caller explicitly said this is a mobile Expo token
-      isMobile = true;
-      tokenValue = pushToken;
-    } else if (fcmToken) {
-      // Caller explicitly said this is a web FCM token
-      isWeb = true;
-      tokenValue = fcmToken;
-    } else if (token) {
-      // Unified field — use platform hint
-      tokenValue = token;
-      if (platform === "web") {
-        isWeb = true;
-      } else if (
-        platform === "mobile" ||
-        platform === "ios" ||
-        platform === "android"
-      ) {
-        isMobile = true;
-      } else {
-        // Heuristic: Expo tokens start with "ExponentPushToken["
-        if (token.startsWith("ExponentPushToken[")) {
-          isMobile = true;
-        } else {
-          // Default to web for unrecognized formats
-          isWeb = true;
-        }
-      }
+    if (fcmToken && !pushToken && !token) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "FCM tokens are no longer accepted. Web clients must POST /push-subscription with a Web Push subscription.",
+      });
     }
 
+    const tokenValue = pushToken || token;
     if (!tokenValue) {
       console.warn(`[PUSH-TOKEN] ❌ Empty token from employee ${req.user.id}`);
       return res.status(400).json({
         success: false,
-        message: "Token required (pushToken, fcmToken, or token field)",
+        message: "Token required (pushToken or token field)",
       });
     }
 
-    // Validate mobile tokens against Expo format
-    if (isMobile) {
-      const { Expo } = require("expo-server-sdk");
-      if (!Expo.isExpoPushToken(tokenValue)) {
-        console.warn(
-          `[PUSH-TOKEN] ❌ Invalid Expo token format from ${req.user.id}: ${tokenValue.substring(0, 40)}`,
-        );
-        return res.status(400).json({
-          success: false,
-          message: "Invalid Expo push token format",
-        });
-      }
+    if (platform === "web") {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Web clients must POST /push-subscription with a Web Push subscription, not a token.",
+      });
     }
 
-    // Web FCM tokens are opaque base64-ish strings, usually 140-200+ chars
-    // No strict format check — just sanity bounds
-    if (isWeb) {
-      if (tokenValue.length < 50 || tokenValue.length > 4096) {
-        console.warn(
-          `[PUSH-TOKEN] ❌ Suspicious FCM token length (${tokenValue.length}) from ${req.user.id}`,
-        );
-        return res.status(400).json({
-          success: false,
-          message: "Invalid FCM web token",
-        });
-      }
+    const { Expo } = require("expo-server-sdk");
+    if (!Expo.isExpoPushToken(tokenValue)) {
+      console.warn(
+        `[PUSH-TOKEN] ❌ Invalid Expo token format from ${req.user.id}: ${tokenValue.substring(0, 40)}`,
+      );
+      return res.status(400).json({
+        success: false,
+        message: "Invalid Expo push token format",
+      });
     }
-
-    // Build update — only touch the relevant field, never overwrite the other
-    const update = {};
-    if (isMobile) update.pushToken = tokenValue;
-    if (isWeb) update.fcmToken = tokenValue;
 
     const result = await Employee.findByIdAndUpdate(
       req.user.id,
-      { $set: update },
+      { $set: { pushToken: tokenValue } },
       { new: true, runValidators: false },
-    ).select("firstName pushToken fcmToken");
+    ).select("firstName pushToken");
 
     if (!result) {
       console.error(`[PUSH-TOKEN] ❌ Employee ${req.user.id} not found`);
@@ -117,15 +104,14 @@ router.post("/push-token", AllEmployeeAppMiddleware, async (req, res) => {
         .json({ success: false, message: "Employee not found" });
     }
 
-    const kind = isMobile ? "mobile (Expo)" : "web (FCM)";
     console.log(
-      `[PUSH-TOKEN] ✅ ${kind} token saved for ${result.firstName} (${req.user.id}): ${tokenValue.substring(0, 35)}...`,
+      `[PUSH-TOKEN] ✅ mobile (Expo) token saved for ${result.firstName} (${req.user.id}): ${tokenValue.substring(0, 35)}...`,
     );
 
     res.json({
       success: true,
-      message: `${kind} token registered`,
-      platform: isMobile ? "mobile" : "web",
+      message: "mobile (Expo) token registered",
+      platform: "mobile",
     });
   } catch (err) {
     console.error("[PUSH-TOKEN] ❌ Error:", err.message);
@@ -134,38 +120,16 @@ router.post("/push-token", AllEmployeeAppMiddleware, async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// DELETE /push-token  — remove a device token on logout
-// Query: ?platform=web | ?platform=mobile  (optional — defaults to clearing both)
+// DELETE /push-token — drop the Expo token on logout
 // ═══════════════════════════════════════════════════════════════════════════
 router.delete("/push-token", AllEmployeeAppMiddleware, async (req, res) => {
   try {
-    const platform = req.query.platform || req.body?.platform || null;
-
-    const update = {};
-    if (platform === "web") {
-      update.fcmToken = null;
-    } else if (
-      platform === "mobile" ||
-      platform === "ios" ||
-      platform === "android"
-    ) {
-      update.pushToken = null;
-    } else {
-      // No platform specified — clear both (legacy behavior, but logs the choice)
-      update.pushToken = null;
-      update.fcmToken = null;
-    }
-
     await Employee.findByIdAndUpdate(
       req.user.id,
-      { $set: update },
+      { $set: { pushToken: null } },
       { runValidators: false },
     );
-
-    const cleared = Object.keys(update).join(", ");
-    console.log(
-      `[PUSH-TOKEN] Cleared [${cleared}] for employee ${req.user.id} (platform=${platform || "all"})`,
-    );
+    console.log(`[PUSH-TOKEN] Cleared Expo token for employee ${req.user.id}`);
     res.json({ success: true, message: "Push token removed" });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -173,12 +137,60 @@ router.delete("/push-token", AllEmployeeAppMiddleware, async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// GET /push-token/debug  — see what tokens this user has + overall stats
+// POST /push-subscription — register a BROWSER (Web Push)
+// ═══════════════════════════════════════════════════════════════════════════
+router.post("/push-subscription", AllEmployeeAppMiddleware, async (req, res) => {
+  try {
+    const { subscription } = req.body || {};
+    if (!subscription?.endpoint) {
+      return res
+        .status(400)
+        .json({ success: false, message: "subscription is required" });
+    }
+
+    await saveSubscription({
+      ownerType: "employee",
+      ownerId: req.user.id,
+      subscription,
+      userAgent: req.headers["user-agent"] || "",
+    });
+
+    res.json({ success: true, message: "Browser subscribed" });
+  } catch (err) {
+    console.error("[PUSH-SUB] ❌", err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DELETE /push-subscription — drop one browser on sign-out
+// ═══════════════════════════════════════════════════════════════════════════
+router.delete(
+  "/push-subscription",
+  AllEmployeeAppMiddleware,
+  async (req, res) => {
+    try {
+      const endpoint = req.body?.endpoint || req.query?.endpoint;
+      if (!endpoint) {
+        return res
+          .status(400)
+          .json({ success: false, message: "endpoint is required" });
+      }
+      const { removed } = await removeSubscription(endpoint);
+      res.json({ success: true, removed });
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  },
+);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GET /push-token/debug — what this user has registered, plus fleet totals
 // ═══════════════════════════════════════════════════════════════════════════
 router.get("/push-token/debug", AllEmployeeAppMiddleware, async (req, res) => {
   try {
     const emp = await Employee.findById(req.user.id)
-      .select("firstName lastName pushToken fcmToken status isActive")
+      .select("firstName lastName pushToken status isActive")
       .lean();
     if (!emp)
       return res.json({ success: false, message: "Employee not found" });
@@ -188,21 +200,22 @@ router.get("/push-token/debug", AllEmployeeAppMiddleware, async (req, res) => {
       ? Expo.isExpoPushToken(emp.pushToken)
       : false;
 
-    const [totalMobile, totalWeb] = await Promise.all([
+    const [mySubs, totalMobile, totalWebSubs] = await Promise.all([
+      PushSubscription.find({ ownerType: "employee", ownerId: req.user.id })
+        .select("endpoint userAgent lastSeenAt")
+        .lean(),
       Employee.countDocuments({
         pushToken: { $exists: true, $nin: [null, ""] },
         $or: [{ status: "active" }, { isActive: true }],
       }),
-      Employee.countDocuments({
-        fcmToken: { $exists: true, $nin: [null, ""] },
-        $or: [{ status: "active" }, { isActive: true }],
-      }),
+      PushSubscription.countDocuments({ ownerType: "employee" }),
     ]);
 
     res.json({
       success: true,
       data: {
         name: `${emp.firstName} ${emp.lastName || ""}`.trim(),
+        pushConfigured: isConfigured(),
         mobile: {
           hasToken: !!emp.pushToken && emp.pushToken !== "",
           tokenPreview: emp.pushToken
@@ -211,15 +224,23 @@ router.get("/push-token/debug", AllEmployeeAppMiddleware, async (req, res) => {
           isValidExpoToken,
         },
         web: {
-          hasToken: !!emp.fcmToken && emp.fcmToken !== "",
-          tokenPreview: emp.fcmToken
-            ? emp.fcmToken.substring(0, 40) + "..."
-            : null,
+          browsers: mySubs.length,
+          subscriptions: mySubs.map((s) => ({
+            host: (() => {
+              try {
+                return new URL(s.endpoint).host;
+              } catch {
+                return "unknown";
+              }
+            })(),
+            userAgent: s.userAgent,
+            lastSeenAt: s.lastSeenAt,
+          })),
         },
         status: emp.status,
         isActive: emp.isActive,
         totalEmployeesWithMobileTokens: totalMobile,
-        totalEmployeesWithWebTokens: totalWeb,
+        totalEmployeeBrowserSubscriptions: totalWebSubs,
       },
     });
   } catch (err) {
@@ -228,130 +249,50 @@ router.get("/push-token/debug", AllEmployeeAppMiddleware, async (req, res) => {
   }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// POST /test-web-push — send one to the caller's own browsers
+// ═══════════════════════════════════════════════════════════════════════════
 router.post("/test-web-push", EmployeeAuthMiddleware, async (req, res) => {
   try {
     const userId = req.user.id || req.user._id;
-    const { title, body, url } = req.body;
+    const { title, body, url } = req.body || {};
 
-    const Employee = require("../../models/Employee");
+    if (!isConfigured()) {
+      return res.status(500).json({
+        success: false,
+        message:
+          "Push is not configured on this server. Set VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY.",
+      });
+    }
+
     const emp = await Employee.findById(userId)
-      .select("firstName lastName fcmToken")
+      .select("firstName lastName")
       .lean();
-
     if (!emp)
-      return res
-        .status(404)
-        .json({ success: false, message: "User not found" });
-    if (!emp.fcmToken)
+      return res.status(404).json({ success: false, message: "User not found" });
+
+    const r = await sendToOwners({
+      ownerType: "employee",
+      ownerIds: [userId],
+      title: title || "🔔 Test Push",
+      body: body || `Hello ${emp.firstName}, this is a test push.`,
+      type: "test",
+      url: url || "/dashboard",
+    });
+
+    if (r.recipients === 0) {
       return res.status(400).json({
         success: false,
         message:
-          "No fcmToken registered. Log in on web first and allow notifications.",
-      });
-
-    let messaging;
-    try {
-      messaging = require("../../config/firebaseAdmin").messaging;
-    } catch (e) {
-      return res.status(500).json({
-        success: false,
-        message: "Firebase Admin not configured: " + e.message,
+          "No browser subscribed. Sign in on web and allow notifications first.",
       });
     }
 
-    const finalTitle = title || "🔔 Test Push";
-    const finalBody = body || `Hello ${emp.firstName}, this is a test push.`;
-    const finalUrl = url || "/dashboard";
-
-    const dataPayload = {
-      title: finalTitle,
-      body: finalBody,
-      type: "test",
-      url: finalUrl,
-      timestamp: String(Date.now()),
-    };
-
-    console.log(
-      `[TEST-PUSH] Sending to ${emp.firstName} (${emp.fcmToken.substring(0, 30)}...)`,
-    );
-
-    try {
-      const result = await messaging.send({
-        token: emp.fcmToken,
-
-        // Top-level data — SW reads these via payload.data
-        data: dataPayload,
-
-        // ── Web Push — NO notification object (data-only prevents Chrome auto-display) ──
-        webpush: {
-          headers: { Urgency: "high", TTL: "0" },
-          fcmOptions: { link: finalUrl },
-        },
-
-        // ── APNs (iOS Safari 16.4+ PWA) ──
-        apns: {
-          headers: {
-            "apns-priority": "10",
-            "apns-push-type": "alert",
-            "apns-expiration": "0",
-          },
-          payload: {
-            aps: {
-              alert: { title: finalTitle, body: finalBody },
-              badge: 1,
-              sound: "default",
-              "mutable-content": 1,
-              "content-available": 1,
-            },
-            ...dataPayload,
-          },
-        },
-
-        // ── Android native (for future mobile-app use) ──
-        android: {
-          priority: "high",
-          ttl: 0,
-          notification: {
-            title: finalTitle,
-            body: finalBody,
-            icon: "ic_notification",
-            color: "#111827",
-            sound: "default",
-            channelId: "matrubhoomi_default",
-            priority: "max",
-            defaultSound: true,
-            defaultVibrateTimings: true,
-          },
-        },
-      });
-
-      console.log(`[TEST-PUSH] ✓ Sent. FCM messageId:`, result);
-      res.json({
-        success: true,
-        message: `Push sent to ${emp.firstName} ${emp.lastName} (FCM messageId: ${result})`,
-        messageId: result,
-      });
-    } catch (err) {
-      const code = err.errorInfo?.code || err.code || "unknown";
-      console.error(`[TEST-PUSH] ✗ FCM error (${code}):`, err.message);
-
-      if (
-        code === "messaging/registration-token-not-registered" ||
-        code === "messaging/invalid-registration-token" ||
-        code === "messaging/third-party-auth-error"
-      ) {
-        await Employee.findByIdAndUpdate(userId, { $set: { fcmToken: null } });
-        return res.status(400).json({
-          success: false,
-          message: `Stale token cleared. Log out and back in on web to register a fresh one. (${code})`,
-        });
-      }
-
-      return res.status(500).json({
-        success: false,
-        message: `FCM send failed: ${err.message} (${code})`,
-      });
-    }
+    res.json({
+      success: r.sent > 0,
+      message: `Push sent to ${r.sent} of ${r.recipients} browser(s) for ${emp.firstName} ${emp.lastName || ""}`.trim(),
+      ...r,
+    });
   } catch (e) {
     console.error("[TEST-PUSH] Route error:", e.message);
     res.status(500).json({ success: false, message: e.message });

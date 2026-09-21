@@ -44,10 +44,11 @@ get the server running:
 | `JWT_SECRET` | signs every session token; changing it signs everyone out |
 | `SALARY_ENCRYPTION_KEY` | encrypts salary at rest — **losing it makes every stored salary unreadable** |
 | `EXTRA_ALLOWED_ORIGINS` | any frontend origin beyond `localhost:3000` / `:3001` |
+| `CLOUDINARY_CLOUD_NAME` / `_API_KEY` / `_API_SECRET` | the only blob store — every photo, document, letter and APK |
 
 Everything else is optional and degrades cleanly when unset: no Brevo key means
-no email, no Firebase service account means no push, no TeamOffice credentials
-means attendance runs on manual entry alone. Each logs a warning and carries on.
+no email, no VAPID keys means no browser push, no TeamOffice credentials means
+attendance runs on manual entry alone. Each logs a warning and carries on.
 
 **A new frontend origin — a LAN address, a tunnel, a preview deployment — must
 be added to `EXTRA_ALLOWED_ORIGINS`.** It gates both CORS and the Socket.IO

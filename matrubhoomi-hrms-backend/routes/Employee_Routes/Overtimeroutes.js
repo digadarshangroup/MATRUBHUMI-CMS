@@ -28,7 +28,8 @@ const OvertimeNotificationLog = require("../../models/HR_Models/OvertimeNotifica
 const Employee = require("../../models/Employee");
 const OvertimeReport = require("../../models/HR_Models/OvertimeReport");
 const DailyAttendance = require("../../models/HR_Models/Dailyattendance");
-const { uploadToGoogleDrive } = require("../../services/mediaUpload.service");
+const { uploadPublicFile } = require("../../services/mediaUpload.service");
+const { absoluteUrl } = require("../../utils/letterDownloadToken");
 const {
   dateStrIST,
   minsSinceMidnightIST,
@@ -288,13 +289,15 @@ router.post(
           ? req.file.originalname.slice(req.file.originalname.lastIndexOf("."))
           : ".pdf";
         const fileName = `OT_${emp.firstName}_${dateStr}_${Date.now()}${ext}`;
-        const driveResult = await uploadToGoogleDrive(req.file.buffer, {
+        const stored = await uploadPublicFile(req.file.buffer, {
           fileName,
           mimeType: req.file.mimetype,
+          folder: "matrubhoomi/overtime-documents",
+          baseUrl: absoluteUrl(req, ""),
         });
         docData = {
-          documentUrl: driveResult.viewUrl || driveResult.url,
-          documentFileId: driveResult.fileId,
+          documentUrl: stored.viewUrl || stored.url,
+          documentFileId: stored.fileId,
           documentFileName: fileName,
           documentUploadedAt: new Date(),
         };

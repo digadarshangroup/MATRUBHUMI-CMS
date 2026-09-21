@@ -10,6 +10,7 @@ yarn-error.log*
 # Environment files
 # ===============================
 .env
+.env.backup*
 .env.local
 !.env.example
 .env.development
@@ -77,11 +78,10 @@ docker-compose.override.yml
 # ===============================
 # Credentials that must never be committed
 # ===============================
-# The Firebase service account is a private key in JSON clothing — config/
-# firebaseAdmin.js reads it from FIREBASE_SERVICE_ACCOUNT, never from a file,
-# but a downloaded copy left in the folder is the usual way one escapes.
+# Nothing here reads a credential from a FILE — every secret arrives through
+# the environment — but a downloaded service-account JSON or key left in the
+# folder is the usual way one escapes anyway.
 serviceAccount*.json
-firebase-adminsdk*.json
 *.pem
 *.key
 *.p12

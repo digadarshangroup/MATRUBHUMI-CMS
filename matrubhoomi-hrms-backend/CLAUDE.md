@@ -78,11 +78,27 @@ figure looks wrong, the bug is almost always upstream in
 `middleware/` also exists and holds something different. Check which one you
 mean.
 
-**Firebase is optional and throws when unconfigured.** `config/firebaseAdmin.js`
-throws at require time if `FIREBASE_SERVICE_ACCOUNT` is missing. That is the
-designed signal: every consumer requires it lazily inside a try/catch and
-degrades to a no-op. Do NOT hoist one of those requires to the top of a file —
-it turns a missing optional credential into a server that will not boot.
+**There is no Firebase and no Google Drive.** Both were removed. Browser push
+is plain VAPID Web Push (`utils/webPush.js`, keys in `VAPID_*`), and every
+stored byte lives in Cloudinary. If you find a `firebase-admin` or `googleapis`
+import, it is from a stale branch — neither package is installed.
+
+**Cloudinary, and the two things this account refuses.** Both were found by
+probing it, and both shape `services/mediaUpload.service.js`:
+- PUBLIC delivery of PDFs and ZIPs answers **401** "deny or ACL failure".
+- `.apk` and `.bin` are rejected **on upload**.
+
+So the rule is: images go public and get a CDN URL; everything else uploads as
+`type: "private"` with the extension stripped, and is served from
+`/api/files/<token>` (`routes/files.js`), which mints a signed URL per request.
+Do not "simplify" a document upload back to a public `secure_url` — it will
+upload fine and produce a link that never opens.
+
+**A private Cloudinary URL is not a protected one.** For a private or
+authenticated RAW asset, the `secure_url` the upload returns already carries a
+working signature and serves 200 to anyone holding it. What makes HR letters
+private is that the URL never leaves the process — `EmployeeDocument.file.url`
+is deliberately `""`. Keep it that way.
 
 ## Domain notes
 

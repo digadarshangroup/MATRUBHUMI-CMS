@@ -15,9 +15,9 @@
 // credentials appear in the environment the same call starts delivering and
 // every record after that reads `sent`, with nothing else changing.
 //
-// Follows the pattern config/firebaseAdmin.js established: the optional
-// dependency is required lazily, inside a try, and its absence is a degraded
-// feature rather than a server that will not boot.
+// Follows the pattern every optional integration here uses: the dependency is
+// required lazily, inside a try, and its absence is a degraded feature rather
+// than a server that will not boot.
 
 "use strict";
 
