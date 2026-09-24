@@ -32,6 +32,12 @@ const { approvalChain } = require("../../services/approvalChain");
 // Derived (never stored) reservation held by pending / manager_approved
 // applications. See utils/leaveReserve.js for why this is not a schema field.
 const { computeReserved } = require("../../utils/leaveReserve");
+// The one balance the app and the CMS both show — see its header.
+const {
+  syncBalance,
+  balanceFor,
+  entitlementOf,
+} = require("../../utils/leaveBalance");
 
 // Email service — used to notify HR when a leave reaches final manager approval.
 // Wrapped in try/catch so missing env vars / disabled emails never crash the route.
@@ -119,34 +125,10 @@ function workingDaysSinceJoining(joiningDate) {
   return count;
 }
 
+// The year's row, in line with the policy (and PL granted once earned) — the
+// same row, by the same rules, that the CMS reads. utils/leaveBalance.js.
 async function ensureBalance(employeeId, year, biometricId, config) {
-  let bal = await LeaveBalance.findOne({ employeeId, year });
-  if (!bal) {
-    bal = await LeaveBalance.create({
-      employeeId,
-      biometricId: biometricId || "",
-      year,
-      entitlement: { CL: config.clPerYear, SL: config.slPerYear, PL: 0 },
-      consumed: { CL: 0, SL: 0, PL: 0 },
-      plEligible: false,
-    });
-  } else {
-    let d = false;
-    if (bal.entitlement.CL !== config.clPerYear) {
-      bal.entitlement.CL = config.clPerYear;
-      d = true;
-    }
-    if (bal.entitlement.SL !== config.slPerYear) {
-      bal.entitlement.SL = config.slPerYear;
-      d = true;
-    }
-    if (bal.plEligible && bal.entitlement.PL !== config.plPerYear) {
-      bal.entitlement.PL = config.plPerYear;
-      d = true;
-    }
-    if (d) await bal.save();
-  }
-  return bal;
+  return syncBalance(employeeId, year, { config });
 }
 
 async function countMonthlyUsage(
@@ -316,45 +298,23 @@ router.get("/balance", AllEmployeeAppMiddleware, async (req, res) => {
     const emp = await Employee.findById(id)
       .select("biometricId dateOfJoining")
       .lean();
-    const bal = await ensureBalance(id, year, emp?.biometricId, config);
+    // Synced (PL granted once earned), with the days still waiting for a
+    // decision. `available` keeps its old meaning (entitlement − consumed);
+    // `effectiveAvailable` is what the app shows. HR's screens get the very
+    // same figures from the same helper.
+    const b = await balanceFor(id, year, { employee: emp, config });
     const wd = workingDaysSinceJoining(emp?.dateOfJoining);
     const wc = wd >= config.initialWaitingDays;
     const pc = wd >= config.daysRequiredForPL;
-    if (pc && !bal.plEligible) {
-      bal.plEligible = true;
-      bal.plGrantedDate = new Date();
-      bal.entitlement.PL = config.plPerYear;
-      await bal.save();
-    }
-    const le = {
-      CL: config.clPerYear,
-      SL: config.slPerYear,
-      PL: bal.plEligible ? config.plPerYear : 0,
-    };
-    const av = {
-      CL: Math.max(0, le.CL - bal.consumed.CL),
-      SL: Math.max(0, le.SL - bal.consumed.SL),
-      PL: Math.max(0, le.PL - bal.consumed.PL),
-    };
-    // Days already committed by applications the employee has filed but that
-    // are not approved yet. Derived on every read, never stored, so nothing
-    // can strand a reservation. `available` keeps its old meaning
-    // (entitlement − consumed); `effectiveAvailable` is what the app shows.
-    const reserved = await computeReserved(id, year);
-    const effectiveAvailable = {
-      CL: Math.max(0, av.CL - reserved.CL),
-      SL: Math.max(0, av.SL - reserved.SL),
-      PL: Math.max(0, av.PL - reserved.PL),
-    };
     res.json({
       success: true,
       data: {
-        balance: bal,
-        available: av,
-        entitlement: bal.entitlement,
-        consumed: bal.consumed,
-        reserved,
-        effectiveAvailable,
+        balance: b.bal,
+        available: b.available,
+        entitlement: b.entitlement,
+        consumed: b.consumed,
+        reserved: b.reserved,
+        effectiveAvailable: b.effectiveAvailable,
         config: {
           initialWaitingDays: config.initialWaitingDays,
           clPerYear: config.clPerYear,
@@ -2498,19 +2458,11 @@ router.patch(
       if (deductDays > 0 && ["CL", "SL", "PL"].includes(a.leaveType)) {
         const fy = new Date(a.fromDate).getFullYear();
         const fc = await LC.getConfig();
-        const liveBal = await LB.findOne({
-          employeeId: a.employeeId,
-          year: fy,
-        }).lean();
+        // Synced first, so someone who has earned PL since their row was
+        // written is not refused a PL leave they are entitled to.
+        const liveBal = await syncBalance(a.employeeId, fy, { config: fc });
         const consumedNow = liveBal?.consumed?.[a.leaveType] || 0;
-        let entitlement;
-        if (a.leaveType === "PL") {
-          entitlement = liveBal?.entitlement?.PL || 0;
-        } else if (a.leaveType === "CL") {
-          entitlement = fc.clPerYear || 0;
-        } else {
-          entitlement = fc.slPerYear || 0;
-        }
+        const entitlement = entitlementOf(fc, liveBal.plEligible)[a.leaveType];
         const liveAvailable = Math.max(0, entitlement - consumedNow);
 
         // (1) Yearly balance check

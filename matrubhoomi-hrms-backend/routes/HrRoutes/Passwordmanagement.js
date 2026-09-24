@@ -7,6 +7,8 @@ const Employee = require("../../models/Employee");
 const HRDepartment = require("../../models/HRDepartment");
 const CEODepartment = require("../../models/CEODepartment");
 const EmployeeAuthMiddleware = require("../../Middlewear/EmployeeAuthMiddlewear");
+const emailService = require("../../services/emailService");
+const { loginDetailsFor } = require("../../utils/loginDetails");
 
 // Helper function to generate default password (must match login route)
 const generateDefaultPassword = (firstName, dateOfBirth) => {
@@ -368,10 +370,29 @@ router.post(
 
       await Model.findByIdAndUpdate(id, { password: hashed });
 
+      // An employee is emailed the temporary password as well, so HR does not
+      // have to find a way to pass it on. The result is reported back rather
+      // than assumed: HR still sees the password, and whether the email went.
+      let emailedTo = null;
+      let emailError = null;
+      if (userType === "employee" && process.env.ENABLE_EMAILS === "true" && user.email) {
+        try {
+          await emailService.sendLoginDetailsEmail(await loginDetailsFor(user), {
+            temporaryPassword: tempPassword,
+            reason: "reset",
+          });
+          emailedTo = user.email;
+        } catch (e) {
+          emailError = e.message;
+        }
+      }
+
       res.status(200).json({
         success: true,
         message: `Password reset successfully for ${userName}`,
         temporaryPassword: tempPassword,
+        emailedTo,
+        emailError,
         userName: userName,
         userType: userType,
         note:

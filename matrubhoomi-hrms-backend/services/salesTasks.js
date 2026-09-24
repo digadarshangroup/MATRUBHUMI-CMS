@@ -29,6 +29,17 @@ const SalesEvent = require("../models/Sales_Models/SalesEvent");
 const Employee = require("../models/Employee");
 const { createWithCode } = require("./salesCodes");
 const { getStage, firstStage, fail } = require("./salesPipeline");
+const { isFieldStaff } = require("./fieldAccess");
+
+function notFieldStaff(name) {
+  const err = fail(
+    `${name || "That employee"} is not in the sales team, so the app would never show them this. ` +
+      "Give them the Sales access in Access Control, or pick someone from the sales team.",
+    409,
+  );
+  err.code = "NOT_FIELD_STAFF";
+  return err;
+}
 const progression = require("./salesProgression");
 
 /**
@@ -75,12 +86,17 @@ async function createAssignment({ actor, payload }) {
 
   for (const row of list) {
     const employee = await Employee.findById(row.employeeId)
-      .select("firstName middleName lastName biometricId isActive status")
+      .select("firstName middleName lastName biometricId isActive status department accessDepartmentId additionalDepartmentIds")
       .lean();
     if (!employee) throw fail(`No employee found for ${row.employeeId}`, 404);
     if (employee.isActive === false) throw fail("That employee is no longer active", 409);
 
     const name = [employee.firstName, employee.middleName, employee.lastName].filter(Boolean).join(" ").trim();
+
+    // The app shows sales work only to the sales field team (one rule, in
+    // services/fieldAccess.js). Anyone else would be handed a task their phone
+    // never shows them — the desk's own list already hides them.
+    if (!(await isFieldStaff(employee))) throw notFieldStaff(name);
 
     /* ── Follow-up: one task per customer, resolved from the customer ── */
     //
@@ -347,4 +363,4 @@ async function closeOutOverdue({ graceHours = 6 } = {}) {
   return { expired, partial };
 }
 
-module.exports = { createAssignment, closeOutOverdue };
+module.exports = { createAssignment, closeOutOverdue, notFieldStaff };

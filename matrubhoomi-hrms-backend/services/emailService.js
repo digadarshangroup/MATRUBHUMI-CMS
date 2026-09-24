@@ -21,7 +21,9 @@ class EmailService {
         this.apiKey = process.env.BREVO_API_KEY;
         this.senderEmail = process.env.HR_SENDER_EMAIL || process.env.CUSTOMER_SENDER_EMAIL || "itdeptmatrubhoomi@gmail.com";
         this.senderName = "Matrubhoomi HR System";
-        this.baseUrl = "https://api.brevo.com/v3";
+        // Overridable so a test can catch the mail on a local port instead of
+        // sending it (scripts/crossViewFlow_test.js). Nothing else sets it.
+        this.baseUrl = process.env.BREVO_API_URL || "https://api.brevo.com/v3";
     }
 
     async _send(payload) {
@@ -52,20 +54,108 @@ class EmailService {
     // =========================================================================
     //  WELCOME EMAIL
     // =========================================================================
+    // Kept for any older caller. New code builds the details with
+    // utils/loginDetails.js and calls sendLoginDetailsEmail.
     async sendWelcomeEmail(employeeData, temporaryPassword) {
+        return this.sendLoginDetailsEmail(
+            { ...employeeData, firstName: employeeData.firstName || employeeData.name, phone: employeeData.phone || temporaryPassword },
+            { temporaryPassword, reason: 'welcome' },
+        );
+    }
+
+    // =========================================================================
+    //  SIGN-IN DETAILS — welcome, "email them again", and a password reset
+    // =========================================================================
+    //
+    // What the employee needs to sign in to the APP: their phone number and a
+    // temporary password (the phone number too), and the fact that the app
+    // makes them choose their own the first time. The old welcome email pointed
+    // at a web address and their email, which the app never accepted.
+    //
+    // @param d       utils/loginDetails.js loginDetailsFor(employee)
+    // @param reason  'welcome' | 'resend' | 'reset'
+    async sendLoginDetailsEmail(d, { temporaryPassword, reason = 'welcome' } = {}) {
+        if (!d?.email) throw new Error('No email address on record');
+        const subject = {
+            welcome: 'Welcome to Matrubhoomi — how to sign in',
+            resend: 'Your Matrubhoomi sign-in details',
+            reset: 'Your Matrubhoomi password was reset',
+        }[reason] || 'Your Matrubhoomi sign-in details';
         try {
-            const loginUrl = "https://hrms.matrubhoomifarms.in/login";
             return await this._send({
-                to: [{ email: employeeData.email, name: employeeData.name || employeeData.email.split('@')[0] }],
-                subject: `Welcome to Matrubhoomi - Your Employee Dashboard Access`,
-                htmlContent: this.generateWelcomeEmailTemplate(employeeData.name, employeeData.email, temporaryPassword, loginUrl, employeeData.employeeId),
-                textContent: this.generatePlainTextContent(employeeData.name, employeeData.email, temporaryPassword, loginUrl, employeeData.employeeId),
-                headers: { 'X-Mailin-custom': 'employee_welcome_email' },
+                to: [{ email: d.email, name: d.name || d.email.split('@')[0] }],
+                subject,
+                htmlContent: this.generateLoginDetailsHtml(d, temporaryPassword, reason),
+                textContent: this.generateLoginDetailsText(d, temporaryPassword, reason),
+                headers: { 'X-Mailin-custom': `employee_login_${reason}` },
             });
         } catch (error) {
-            console.error('Error sending welcome email:', error.response?.data || error.message);
+            console.error('Error sending sign-in email:', error.response?.data || error.message);
             throw new Error(`Failed to send email: ${error.response?.data?.message || error.message}`);
         }
+    }
+
+    generateLoginDetailsHtml(d, password, reason) {
+        const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        const green = '#1F6B33';
+        const intro = reason === 'reset'
+            ? 'HR has reset your password. Use the temporary password below to sign in again.'
+            : reason === 'resend'
+                ? 'Here are your sign-in details for the Matrubhoomi Employee app again.'
+                : 'Welcome to Matrubhoomi Farms &amp; Developers. This is how you sign in to the Matrubhoomi Employee app — for your attendance, leave, payslips, letters and more.';
+        const row = (label, value, note = '') => `<tr><td style="padding:10px 14px;color:#5b6660;font-size:14px;border-bottom:1px solid #e6ebe7;">${label}</td><td style="padding:10px 14px;font-size:16px;color:#16211a;font-family:Consolas,Menlo,monospace;letter-spacing:1px;border-bottom:1px solid #e6ebe7;">${esc(value)}${note ? `<div style="font-family:Arial,sans-serif;font-size:12px;letter-spacing:0;color:#5b6660;">${note}</div>` : ''}</td></tr>`;
+        const about = [d.employeeId && `Employee ID ${esc(d.employeeId)}`, [d.designation, d.department].filter(Boolean).map(esc).join(', '), d.managerName && `Reporting manager: ${esc(d.managerName)}`].filter(Boolean).join(' &middot; ');
+        const app = d.appUrl
+            ? `<p style="margin:22px 0 6px;"><a href="${esc(d.appUrl)}" style="display:inline-block;background:${green};color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:8px;font-size:15px;">Download the app (Android)</a></p><p style="margin:0;font-size:13px;color:#5b6660;">If your phone asks, allow installing apps from this source.</p>`
+            : `<p style="margin:22px 0 0;font-size:14px;">Don't have the app yet? Ask HR for the Matrubhoomi Employee app.</p>`;
+        const cms = d.cmsUrl
+            ? `<p style="margin:18px 0 0;font-size:14px;">You can also use the Matrubhoomi CMS: sign in at <a href="${esc(d.cmsUrl)}" style="color:${green};">${esc(d.cmsUrl)}</a> with ${esc(d.email)} and the same password.</p>`
+            : '';
+        return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f3f5f3;font-family:Arial,Helvetica,sans-serif;color:#16211a;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f5f3;padding:24px 12px;"><tr><td align="center">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e0e6e1;">
+<tr><td style="background:${green};padding:20px 24px;color:#ffffff;font-size:18px;">Matrubhoomi Farms &amp; Developers</td></tr>
+<tr><td style="padding:26px 24px 8px;font-size:15px;line-height:1.55;">
+<p style="margin:0 0 12px;">Hi ${esc(d.firstName || d.name || 'there')},</p>
+<p style="margin:0 0 18px;">${intro}</p>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e0e6e1;border-radius:8px;border-collapse:separate;overflow:hidden;">
+${row('Phone number', d.phone)}
+${row('Temporary password', password, password === d.phone ? 'This is your phone number.' : '')}
+</table>
+<p style="margin:16px 0 0;">The first time you sign in, the app asks you to choose your own password. After that, this temporary one stops working.</p>
+${app}
+${cms}
+${about ? `<p style="margin:22px 0 0;font-size:13px;color:#5b6660;">${about}</p>` : ''}
+</td></tr>
+<tr><td style="padding:18px 24px 24px;font-size:12px;line-height:1.5;color:#5b6660;border-top:1px solid #eef1ee;">
+Keep your password to yourself — nobody at Matrubhoomi will ever ask you for it. Didn't expect this email? Reply to it and HR will look into it.<br>&copy; ${new Date().getFullYear()} Matrubhoomi Farms &amp; Developers
+</td></tr></table></td></tr></table></body></html>`;
+    }
+
+    generateLoginDetailsText(d, password, reason) {
+        const intro = reason === 'reset'
+            ? 'HR has reset your password. Use the temporary password below to sign in again.'
+            : reason === 'resend'
+                ? 'Here are your sign-in details for the Matrubhoomi Employee app again.'
+                : 'Welcome to Matrubhoomi Farms & Developers. This is how you sign in to the Matrubhoomi Employee app.';
+        const lines = [
+            `Hi ${d.firstName || d.name || 'there'},`,
+            '',
+            intro,
+            '',
+            `Phone number:       ${d.phone}`,
+            `Temporary password: ${password}${password === d.phone ? '  (your phone number)' : ''}`,
+            '',
+            'The first time you sign in, the app asks you to choose your own password. After that, this temporary one stops working.',
+            '',
+            d.appUrl ? `Download the app (Android): ${d.appUrl}` : "Don't have the app yet? Ask HR for the Matrubhoomi Employee app.",
+        ];
+        if (d.cmsUrl) lines.push('', `You can also use the Matrubhoomi CMS: ${d.cmsUrl} — sign in with ${d.email} and the same password.`);
+        const about = [d.employeeId && `Employee ID ${d.employeeId}`, [d.designation, d.department].filter(Boolean).join(', '), d.managerName && `Reporting manager: ${d.managerName}`].filter(Boolean).join(' · ');
+        if (about) lines.push('', about);
+        lines.push('', "Keep your password to yourself — nobody at Matrubhoomi will ever ask you for it. Didn't expect this email? Reply to it and HR will look into it.", `© ${new Date().getFullYear()} Matrubhoomi Farms & Developers`);
+        return lines.join('\n');
     }
 
     // =========================================================================

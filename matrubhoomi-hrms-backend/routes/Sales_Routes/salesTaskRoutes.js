@@ -14,8 +14,14 @@ const SalesFormSubmission = require("../../models/Sales_Models/SalesFormSubmissi
 const SalesLead = require("../../models/Sales_Models/SalesLead");
 const SalesEvent = require("../../models/Sales_Models/SalesEvent");
 const Employee = require("../../models/Employee");
-const { createAssignment } = require("../../services/salesTasks");
-const { notifyTasksAssigned, notifyTaskCancelled } = require("../../services/salesNotify");
+const { createAssignment, notFieldStaff } = require("../../services/salesTasks");
+const { isFieldStaff } = require("../../services/fieldAccess");
+const {
+  notifyTasksAssigned,
+  notifyTaskCancelled,
+  notifyTaskReassigned,
+} = require("../../services/salesNotify");
+const mongoose = require("mongoose");
 const { deskRead, deskWrite, actorFrom, sendError } = require("./_deskAuth");
 
 /* ── The board ────────────────────────────────────────────────────── */
@@ -195,14 +201,20 @@ router.patch("/:id", deskWrite, async (req, res) => {
  */
 router.post("/:id/reassign", deskWrite, async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ success: false, message: "No such task" });
+    }
     const task = await SalesTask.findById(req.params.id);
     if (!task) return res.status(404).json({ success: false, message: "No such task" });
     if (["completed", "cancelled", "expired"].includes(task.status)) {
       return res.status(409).json({ success: false, message: `That task is already ${task.status}` });
     }
 
-    const employee = await Employee.findById(req.body?.employeeId)
-      .select("firstName middleName lastName biometricId isActive")
+    if (!mongoose.Types.ObjectId.isValid(req.body?.employeeId)) {
+      return res.status(400).json({ success: false, message: "Pick who should do it" });
+    }
+    const employee = await Employee.findById(req.body.employeeId)
+      .select("firstName middleName lastName biometricId isActive department accessDepartmentId additionalDepartmentIds")
       .lean();
     if (!employee) return res.status(404).json({ success: false, message: "No such employee" });
     if (employee.isActive === false) {
@@ -213,7 +225,12 @@ router.post("/:id/reassign", deskWrite, async (req, res) => {
     }
 
     const name = [employee.firstName, employee.middleName, employee.lastName].filter(Boolean).join(" ").trim();
+    if (!(await isFieldStaff(employee))) {
+      const err = notFieldStaff(name);
+      return res.status(409).json({ success: false, code: err.code, message: err.message });
+    }
     const actor = actorFrom(req);
+    const fromId = task.assignedTo;
     const from = task.assignedToName || String(task.assignedTo);
     const reason = String(req.body?.reason || "").trim();
 
@@ -277,6 +294,21 @@ router.post("/:id/reassign", deskWrite, async (req, res) => {
       });
     }
 
+    // Both phones: the new holder's list gains it, the old one's loses it.
+    notifyTaskReassigned(task, { fromId, fromName: from, reason });
+    const io = req.app.get("io");
+    if (io) {
+      io.to(`employee-${task.assignedTo}`).emit("sales:task_assigned", {
+        taskId: String(task._id),
+        code: task.code,
+        title: task.title,
+        type: task.type,
+        targetCount: task.targetCount,
+        dueAt: task.dueAt,
+      });
+      io.to(`employee-${fromId}`).emit("sales:task_reassigned", { taskId: String(task._id) });
+    }
+
     res.json({ success: true, data: task, message: `${task.code} is now ${name}'s` });
   } catch (err) {
     sendError(res, err, "sales-tasks");
@@ -287,10 +319,17 @@ router.post("/:id/reassign", deskWrite, async (req, res) => {
 
 router.post("/:id/cancel", deskWrite, async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ success: false, message: "No such task" });
+    }
     const task = await SalesTask.findById(req.params.id);
     if (!task) return res.status(404).json({ success: false, message: "No such task" });
     if (task.status === "completed") {
       return res.status(409).json({ success: false, message: "That task is already finished" });
+    }
+    // A second cancel would tell the employee twice about one decision.
+    if (task.status === "cancelled") {
+      return res.status(409).json({ success: false, message: "That task is already cancelled" });
     }
 
     task.status = "cancelled";

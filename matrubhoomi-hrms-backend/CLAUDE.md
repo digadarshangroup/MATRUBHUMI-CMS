@@ -45,6 +45,14 @@ recording, announcements, the CEO overview, releases). Run them before
 touching `leaveRoutes.js`, `regularization.js`, `Overtimeroutes.js`, the
 password routes or `/api/ceo/overview`.
 
+`scripts/crossViewFlow_test.js` (136) checks that the CMS and the app agree:
+leave balances after every kind of decision, HR's add-leave, documents from
+issue to withdrawal, sales tasks being moved and called off, and the sign-in
+email. It catches the email itself on a local port (`BREVO_API_URL`) and
+refuses to run if that points anywhere else. Run it before touching
+`Leave_section.js`, `utils/leaveBalance.js`, the document routes,
+`salesTaskRoutes.js` or anything that sends mail.
+
 `scripts/seedDemo.js` builds a whole demo company THROUGH the API (desk
 logins, ten people, a month of attendance, leave, a recorded round) and
 refuses any database that is not local.
@@ -244,6 +252,22 @@ turns lookups off (the tests seed `GeoPlace` rows instead).
   the inbox's `readAt`. Taking one back deletes the rows, keeps the record.
 - **`/api/ceo/overview`** is counts only, each bounded by today or an indexed
   status, each linked to the screen that owns it.
+- **One leave balance.** `utils/leaveBalance.js` is the only place "days
+  left" is worked out — the app's balance, the CMS list and add-leave panel,
+  HR's approve/add/withdraw all go through it (CL/SL from the policy, PL once
+  earned by length of service, `reserved` = requests still waiting). Never
+  read `entitlement` off a stored row and subtract: that is how an approved PL
+  leave once deducted nothing. HR's add-leave books what the balance does not
+  cover as unpaid (`lwpDays`), as the manager's already did.
+- **Sales work goes to field staff only.** Assigning or moving a task to
+  anyone else is 409 `NOT_FIELD_STAFF` — their app would never show it. A move
+  tells both people; accepting a task that moved or was called off answers
+  `TASK_MOVED` / `TASK_CLOSED`.
+- **The sign-in email** (`utils/loginDetails.js` →
+  `emailService.sendLoginDetailsEmail`) says what the APP signs in with: the
+  phone number, which is also the first password. It goes on creation, from
+  the profile's "Email sign-in details" (`POST /api/employees/:id/send-login-details`,
+  only while the phone number is still their password) and on an HR reset.
 - **`MEDIA_STORAGE=local`** stores uploads on disk (`MEDIA_LOCAL_DIR`) instead
   of Cloudinary — for demo and test machines only; public images are served at
   `/media`, everything else still through `/api/files/<token>`.

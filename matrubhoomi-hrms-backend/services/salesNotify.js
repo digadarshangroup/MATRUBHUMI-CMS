@@ -46,6 +46,34 @@ function notifyTaskCancelled(task) {
 }
 
 /**
+ * A task handed from one person to another. Both hear about it: the new holder
+ * so they know to go, the old one so they do not — before this, the task just
+ * vanished from one phone and appeared on the other without a word to either.
+ */
+function notifyTaskReassigned(task, { fromId, fromName = "", reason = "" } = {}) {
+  if (!task) return;
+  const name = task.title || task.code || "Assignment";
+  if (task.assignedTo) {
+    recordInbox([String(task.assignedTo)], {
+      title: `New assignment: ${name}`,
+      body: `Handed to you${fromName ? ` from ${fromName}` : ""}${reason ? ` — ${reason}` : ""}. Open Work in the app to start.`,
+      kind: "sales_task",
+      screen: "Work",
+      id: String(task._id),
+    });
+  }
+  if (fromId && String(fromId) !== String(task.assignedTo)) {
+    recordInbox([String(fromId)], {
+      title: `Assignment moved: ${name}`,
+      body: `The sales desk gave this to ${task.assignedToName || "someone else"}${reason ? ` — ${reason}` : ""}. You no longer need to do it.`,
+      kind: "sales_task",
+      screen: "Work",
+      id: String(task._id),
+    });
+  }
+}
+
+/**
  * @param result  what salesProgression.approveSubmission / rejectSubmission returned
  */
 function notifyVisitDecision(result, decision, note = "") {
@@ -68,4 +96,4 @@ function notifyVisitDecision(result, decision, note = "") {
   });
 }
 
-module.exports = { notifyTasksAssigned, notifyTaskCancelled, notifyVisitDecision };
+module.exports = { notifyTasksAssigned, notifyTaskCancelled, notifyTaskReassigned, notifyVisitDecision };

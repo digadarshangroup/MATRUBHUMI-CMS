@@ -1,10 +1,13 @@
 const express = require("express");
+const mongoose = require("mongoose");
 const router = express.Router();
 const bcrypt = require("bcryptjs");
 const Employee = require("../../models/Employee");
 const SalaryConfig = require("../../models/Salaryconfig");
 const EmployeeAuthMiddlewear = require("../../Middlewear/EmployeeAuthMiddlewear");
 const emailService = require("../../services/emailService");
+const { loginDetailsFor } = require("../../utils/loginDetails");
+const { matchesEmployeePassword } = require("../../utils/employeePassword");
 const { recordChange } = require("../../services/changeLog");
 const {
   invalidateAppAccess,
@@ -397,28 +400,27 @@ router.post("/", EmployeeAuthMiddlewear, async (req, res) => {
       },
     });
 
-    // Send welcome email asynchronously
+    // The welcome email: how to sign in to the app (phone number + the
+    // temporary password), sent in the background. `loginEmail` in the
+    // response tells the CMS which of the three happened, so HR knows whether
+    // to pass the details on themselves.
+    let loginEmail = "off";
+    if (process.env.ENABLE_EMAILS === "true" && !employeeData.email) loginEmail = "no_email";
     if (process.env.ENABLE_EMAILS === "true" && employeeData.email) {
+      loginEmail = "sending";
       try {
-        const emailData = {
-          name:
-            [employeeData.firstName, employeeData.lastName]
-              .filter(Boolean)
-              .join(" ") || "Employee",
-          email: employeeData.email,
-          employeeId: employeeData.biometricId,
-          department: employeeData.department,
-          designation: employeeData.designation || employeeData.jobPosition,
-          // Don't include temporaryPassword here since it's passed separately
-        };
-
         // The password is NOT logged. A boot log is copied into aggregators,
         // screenshots and terminal scrollback, and this line put a working
         // password for every new employee into all three.
-        console.log("Sending welcome email to:", emailData.email);
+        console.log("Sending welcome email to:", employeeData.email);
 
-        emailService
-          .sendWelcomeEmail(emailData, temporaryPassword)
+        loginDetailsFor(newEmployee)
+          .then((details) =>
+            emailService.sendLoginDetailsEmail(details, {
+              temporaryPassword,
+              reason: "welcome",
+            }),
+          )
           .then(() => {
             console.log(
               "Welcome email sent successfully for employee:",
@@ -457,6 +459,8 @@ router.post("/", EmployeeAuthMiddlewear, async (req, res) => {
       success: true,
       message: "Employee created successfully",
       data: resp,
+      // "sending" | "off" (ENABLE_EMAILS is not "true") | "no_email"
+      loginEmail,
     });
   } catch (error) {
     console.error("Create employee error:", error);
@@ -475,6 +479,50 @@ router.post("/", EmployeeAuthMiddlewear, async (req, res) => {
     res
       .status(500)
       .json({ success: false, message: "Error creating employee" });
+  }
+});
+
+// ─── EMAIL SIGN-IN DETAILS again ──────────────────────────────────────────────
+// For the welcome email that never arrived (spam, a typo in the address since
+// corrected, emails switched on after they joined). Only while the phone
+// number is still their password: once they choose their own, nobody but
+// them knows it, and a reset (Password management) is the way back in — it
+// emails the new temporary password too.
+router.post("/:id/send-login-details", EmployeeAuthMiddlewear, async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id))
+      return res.status(404).json({ success: false, message: "Employee not found" });
+    const emp = await Employee.findById(req.params.id);
+    if (!emp) return res.status(404).json({ success: false, message: "Employee not found" });
+    const name = `${emp.firstName || ""} ${emp.lastName || ""}`.trim() || "This employee";
+    if (emp.isActive === false)
+      return res.status(409).json({ success: false, code: "INACTIVE", message: `${name} no longer works here.` });
+    if (!emp.email)
+      return res.status(400).json({ success: false, code: "NO_EMAIL", message: `There is no email address on ${name}'s record. Add one with Edit Profile first.` });
+    if (process.env.ENABLE_EMAILS !== "true")
+      return res.status(409).json({ success: false, code: "EMAILS_OFF", message: "Emails are switched off on this server (ENABLE_EMAILS), so nothing can be sent. Give them their details yourself: their phone number is their first password." });
+    const phone = String(emp.phone || "").replace(/\D/g, "");
+    if (phone.length !== 10)
+      return res.status(400).json({ success: false, code: "NO_PHONE", message: `${name} has no 10-digit mobile number on record, and the app signs in with one.` });
+    const stillFirst = (await matchesEmployeePassword(emp, phone)).ok;
+    if (!stillFirst)
+      return res.status(409).json({ success: false, code: "PASSWORD_ALREADY_SET", message: `${name} has already chosen their own password, so there is nothing to send. If they have forgotten it, reset it in Password management — that emails them a new temporary one.` });
+
+    try {
+      await emailService.sendLoginDetailsEmail(await loginDetailsFor(emp), {
+        temporaryPassword: phone,
+        reason: "resend",
+      });
+    } catch (err) {
+      await Employee.updateOne({ _id: emp._id }, { $set: { welcomeEmailSent: false, emailError: err.message } });
+      return res.status(502).json({ success: false, code: "EMAIL_FAILED", message: `The email could not be sent: ${err.message}` });
+    }
+    const sentAt = new Date();
+    await Employee.updateOne({ _id: emp._id }, { $set: { welcomeEmailSent: true, emailSentAt: sentAt }, $unset: { emailError: 1 } });
+    res.json({ success: true, message: `Sign-in details emailed to ${emp.email}`, data: { emailedTo: emp.email, sentAt } });
+  } catch (error) {
+    console.error("send-login-details:", error);
+    res.status(500).json({ success: false, message: "Could not send the sign-in details" });
   }
 });
 
@@ -1238,6 +1286,13 @@ router.get("/:id/details", EmployeeAuthMiddlewear, async (req, res) => {
         isPhysicallyChallenged: employee.isPhysicallyChallenged ? "Yes" : "No",
         profilePhoto: employee.profilePhoto,
         customFields: employee.personalCustomFields || [],
+      },
+      // Did the sign-in email reach them, and are they using the app yet.
+      loginInfo: {
+        emailSent: employee.welcomeEmailSent === true,
+        emailSentAt: employee.emailSentAt || null,
+        emailError: employee.emailError || null,
+        appLastSeenAt: employee.appInfo?.lastSeenAt || null,
       },
       workInfo: {
         department: employee.department,

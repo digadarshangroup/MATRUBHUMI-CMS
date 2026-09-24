@@ -394,6 +394,21 @@ function notifyLeaveWithdrawn(application) {
   });
 }
 
+/** HR withdrew or cancelled a leave from the CMS. To the employee — before,
+ *  their leave simply changed under them with no word. */
+function notifyLeaveCancelledByHR(application, { refunded = 0, reason = "" } = {}) {
+  const a = application || {};
+  if (!a.employeeId) return;
+  const back = refunded > 0 ? ` ${refunded} day${refunded === 1 ? "" : "s"} went back to your balance.` : "";
+  notifyEmployee(a.employeeId, {
+    title: "Leave withdrawn by HR",
+    body: withReason(`Your ${leaveOf(a)} ${leaveDates(a)} was withdrawn by HR.${back}`, reason),
+    kind: "leave",
+    screen: "Leave",
+    id: a._id,
+  });
+}
+
 /** Not in the contract table, but the manager edit path already notified —
  *  kept so that behaviour doesn't regress. To the employee. */
 function notifyLeaveEdited(application, editorName) {
@@ -626,6 +641,7 @@ module.exports = {
   notifyLeaveRejected,
   notifyLeaveWithdrawRequested,
   notifyLeaveWithdrawn,
+  notifyLeaveCancelledByHR,
   notifyLeaveEdited,
   // regularization
   notifyRegularizationSubmitted,

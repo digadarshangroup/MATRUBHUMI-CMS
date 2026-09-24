@@ -62,6 +62,13 @@ router.use(
   requireFieldStaff,
 );
 
+// A task or lead id that is not an id at all is "no such thing", not a crash
+// (it used to reach the query and come back as a 500).
+router.param("id", (req, res, next, id) => {
+  if (require("mongoose").Types.ObjectId.isValid(id)) return next();
+  return res.status(404).json({ success: false, message: "No such record" });
+});
+
 /** Same contract as the desk side: `status` means the caller, bare means us. */
 function sendError(res, err, context = "field") {
   const status = err?.status || 500;
@@ -78,6 +85,10 @@ function sendError(res, err, context = "field") {
 }
 
 /** The shape the app renders a task in. Flat, small, and complete. */
+const PRIORITIES = { urgent: 3, high: 2, normal: 1, low: 0 };
+const PRIORITY_RANK = (t) => PRIORITIES[t.priority] ?? 1;
+const dueOrder = (t) => (t.scheduledFor ? new Date(t.scheduledFor).getTime() : 0);
+
 function taskForApp(task) {
   return {
     id: String(task._id),
@@ -255,9 +266,13 @@ router.get("/bootstrap", async (req, res) => {
         isActive: true,
         status: { $in: ["assigned", "accepted", "in_progress", "pending_approval", "rework"] },
       })
-        .sort({ scheduledFor: 1, priority: -1 })
+        .sort({ scheduledFor: 1 })
         .limit(100)
-        .lean(),
+        .lean()
+        // Priority is a word, and Mongo sorts words alphabetically — "urgent,
+        // normal, low, high". Ranked here instead: soonest first, then most
+        // urgent.
+        .then((rows) => rows.sort((a, b) => dueOrder(a) - dueOrder(b) || PRIORITY_RANK(b) - PRIORITY_RANK(a))),
       pipeline.listStages("default"),
       FieldDay.findOne({ employeeId: employee.id, day: today }).select("-path -stops").lean(),
       // The week behind today, for the employee's own strip on the home screen.
@@ -440,8 +455,19 @@ router.post("/tasks/:id/accept", async (req, res) => {
       { new: true },
     );
     // Not an error when it is already accepted — the app retries this from its
-    // queue, and a second accept is a no-op, not a failure.
-    if (!task) return res.json({ success: true, alreadyAccepted: true });
+    // queue, and a second accept is a no-op, not a failure. A task that has
+    // since been given to someone else, or called off, is a different answer:
+    // it used to come back as "already accepted" too.
+    if (!task) {
+      const now = await SalesTask.findById(req.params.id).select("assignedTo status").lean();
+      if (!now || String(now.assignedTo) !== String(req.employee.id)) {
+        return res.status(409).json({ success: false, code: "TASK_MOVED", message: "This task has been given to someone else." });
+      }
+      if (["cancelled", "expired"].includes(now.status)) {
+        return res.status(409).json({ success: false, code: "TASK_CLOSED", message: `This task was ${now.status}.` });
+      }
+      return res.json({ success: true, alreadyAccepted: true });
+    }
     res.json({ success: true, data: taskForApp(task) });
   } catch (err) {
     sendError(res, err);

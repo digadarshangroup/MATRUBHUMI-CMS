@@ -20,6 +20,7 @@ const emailService = require("../../services/emailService");
 const {
   notifyLeaveApproved,
   notifyLeaveRejected,
+  notifyLeaveCancelledByHR,
 } = require("../../utils/notifyEmployee");
 
 // Days already committed by applications that are filed but not yet approved.
@@ -27,6 +28,15 @@ const {
 // stateful reserve would have to be refunded on six paths that need no code
 // today. HR sees exactly the number the employee's own app screen sees.
 const { computeReserved } = require("../../utils/leaveReserve");
+// The one balance the CMS and the employee app both show — see its header.
+const {
+  syncBalance,
+  balanceFor,
+  reservedFor,
+  syncMany,
+  viewOf,
+  plEarned,
+} = require("../../utils/leaveBalance");
 
 // Import attendance sync helpers
 const Attendance_section = require("./Attendance_section");
@@ -89,22 +99,10 @@ async function applyBalanceDelta({
 }) {
   if (!employeeId || !year || !deltas) return { applied: {} };
 
-  let bal = await LeaveBalance.findOne({ employeeId, year });
-  if (!bal) {
-    const cfg = config || (await LeaveConfig.getConfig());
-    bal = await LeaveBalance.create({
-      employeeId,
-      biometricId: biometricId || "",
-      year,
-      entitlement: {
-        CL: cfg.clPerYear || 5,
-        SL: cfg.slPerYear || 5,
-        PL: 0,
-      },
-      consumed: { CL: 0, SL: 0, PL: 0 },
-      plEligible: false,
-    });
-  }
+  // Synced, never raw: capping at a stale stored entitlement is how an
+  // approved PL leave for someone whose row had not been granted PL yet used
+  // to deduct nothing at all.
+  const bal = await syncBalance(employeeId, year, { config });
 
   const applied = {};
   let anyChange = false;
@@ -516,23 +514,11 @@ router.delete("/holidays/:id", EmployeeAuthMiddleware, async (req, res) => {
 
 router.get("/balance/:employeeId", EmployeeAuthMiddleware, async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.employeeId))
+      return res.status(404).json({ success: false, message: "Employee not found" });
     const year = Number(req.query.year) || new Date().getFullYear();
-    const bal = await LeaveBalance.findOne({
-      employeeId: req.params.employeeId,
-      year,
-    }).lean();
-    if (!bal) return res.json({ success: true, data: null });
-    res.json({
-      success: true,
-      data: {
-        ...bal,
-        available: {
-          CL: Math.max(0, (bal.entitlement.CL || 0) - (bal.consumed.CL || 0)),
-          SL: Math.max(0, (bal.entitlement.SL || 0) - (bal.consumed.SL || 0)),
-          PL: Math.max(0, (bal.entitlement.PL || 0) - (bal.consumed.PL || 0)),
-        },
-      },
-    });
+    const { bal, config, ...figures } = await balanceFor(req.params.employeeId, year);
+    res.json({ success: true, data: { ...bal.toObject(), ...figures } });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -792,21 +778,24 @@ router.get("/all-balances", EmployeeAuthMiddleware, async (req, res) => {
       .sort({ firstName: 1 })
       .lean();
     const empIds = emps.map((e) => e._id);
-    const balances = await LeaveBalance.find({
-      employeeId: { $in: empIds },
-      year,
-    }).lean();
-    const balByEmp = new Map(balances.map((b) => [String(b.employeeId), b]));
-
     const config = await LeaveConfig.getConfig();
+    // Every row created or brought in line with the policy (PL granted once
+    // earned) — the same rows, by the same rules, the employees' phones read.
+    // Before, this list showed whatever a row last said, so someone past the
+    // PL threshold showed "PL due" here and 18 days on their phone.
+    const stored = await LeaveBalance.find({ employeeId: { $in: empIds }, year }).lean();
+    const hadRecord = new Set(stored.map((b) => String(b.employeeId)));
+    // Only this year and later are brought in line — a past year is history
+    // and is shown exactly as it was stored.
+    const balByEmp =
+      year >= new Date().getFullYear()
+        ? await syncMany(emps, year, config)
+        : new Map(stored.map((b) => [String(b.employeeId), b]));
+    const onHold = await reservedFor(empIds, year);
+
     const rows = emps.map((e) => {
       const bal = balByEmp.get(String(e._id));
-      const ent = bal?.entitlement || {
-        CL: config.clPerYear,
-        SL: config.slPerYear,
-        PL: 0,
-      };
-      const con = bal?.consumed || { CL: 0, SL: 0, PL: 0 };
+      const v = viewOf(bal, config, onHold.get(String(e._id)));
       const name = `${e.firstName || ""} ${e.lastName || ""}`.trim();
       const workingDays = workingDaysSince(e.dateOfJoining);
       return {
@@ -818,24 +807,17 @@ router.get("/all-balances", EmployeeAuthMiddleware, async (req, res) => {
         profilePhoto: e.profilePhoto?.url || null,
         dateOfJoining: e.dateOfJoining,
         workingDays,
-        plEligibleByPolicy: workingDays >= (config.daysRequiredForPL || 240),
-        plEligible: bal?.plEligible || false,
-        entitlement: {
-          CL: Number(ent.CL || 0),
-          SL: Number(ent.SL || 0),
-          PL: Number(ent.PL || 0),
-        },
-        consumed: {
-          CL: Number(con.CL || 0),
-          SL: Number(con.SL || 0),
-          PL: Number(con.PL || 0),
-        },
-        available: {
-          CL: Math.max(0, Number(ent.CL || 0) - Number(con.CL || 0)),
-          SL: Math.max(0, Number(ent.SL || 0) - Number(con.SL || 0)),
-          PL: Math.max(0, Number(ent.PL || 0) - Number(con.PL || 0)),
-        },
-        hasBalanceRecord: !!bal,
+        plEligibleByPolicy: plEarned(null, e.dateOfJoining, config),
+        plEligible: v.plEligible,
+        entitlement: v.entitlement,
+        consumed: v.consumed,
+        // entitlement − approved days. Payroll's number.
+        available: v.available,
+        // Requests still waiting, and what is left once they are decided —
+        // the figure the employee's own app shows as "left".
+        reserved: v.reserved,
+        effectiveAvailable: v.effectiveAvailable,
+        hasBalanceRecord: hadRecord.has(String(e._id)),
       };
     });
 
@@ -1130,34 +1112,27 @@ router.get(
   EmployeeAuthMiddleware,
   async (req, res) => {
     try {
-      const year = new Date().getFullYear();
-      const bal = await LeaveBalance.findOne({
-        employeeId: req.params.employeeId,
-        year,
-      }).lean();
-      if (!bal) return res.json({ success: true, data: null });
-      const available = {
-        CL: Math.max(0, (bal.entitlement?.CL || 0) - (bal.consumed?.CL || 0)),
-        SL: Math.max(0, (bal.entitlement?.SL || 0) - (bal.consumed?.SL || 0)),
-        PL: Math.max(0, (bal.entitlement?.PL || 0) - (bal.consumed?.PL || 0)),
-        LWP: 999,
-        CO: 999,
-        WFH: 999,
-      };
+      if (!mongoose.Types.ObjectId.isValid(req.params.employeeId))
+        return res.status(404).json({ success: false, message: "Employee not found" });
+      const year = Number(req.query.year) || new Date().getFullYear();
       // `available` keeps its exact meaning — entitlement minus APPROVED days.
       // Payroll and the apply-time paid/LWP split both read that number, so
       // deflating it here would cut pay for a leave that was merely requested.
       // `reserved` is additive disclosure: what is already spoken for by
-      // pending / manager_approved applications.
-      const reserved = await computeReserved(req.params.employeeId, year);
-      const effectiveAvailable = {
-        CL: Math.max(0, available.CL - reserved.CL),
-        SL: Math.max(0, available.SL - reserved.SL),
-        PL: Math.max(0, available.PL - reserved.PL),
-      };
+      // pending / manager_approved applications. Same helper as the app's own
+      // balance, so the two can no longer disagree — and a row that does not
+      // exist yet is created rather than shown to HR as "no balance".
+      const { bal, config, available, ...figures } = await balanceFor(
+        req.params.employeeId,
+        year,
+      );
       res.json({
         success: true,
-        data: { ...bal, available, reserved, effectiveAvailable },
+        data: {
+          ...bal.toObject(),
+          ...figures,
+          available: { ...available, LWP: 999, CO: 999, WFH: 999 },
+        },
       });
     } catch (e) {
       res.status(500).json({ success: false, message: e.message });
@@ -1233,6 +1208,26 @@ router.post("/add-on-behalf", EmployeeAuthMiddleware, async (req, res) => {
       });
     }
 
+    // Paid as far as their balance goes, unpaid beyond it — the rule the
+    // manager's add-on-behalf and the employee's own application already
+    // follow. Before, the whole leave was booked as paid while the deduction
+    // was quietly capped at the entitlement, so payroll paid days nobody had
+    // and HR was never told.
+    const bucket = ["CL", "SL", "PL"].includes(leaveType);
+    let paidDays = null;
+    let lwpDays = null;
+    let room = null;
+    if (bucket) {
+      const b = await balanceFor(emp._id, parseLocalDate(fromStr).getFullYear(), {
+        employee: emp,
+      });
+      // effectiveAvailable: days their own waiting requests already hold
+      // are not free to spend twice.
+      room = b.effectiveAvailable[leaveType];
+      paidDays = Math.max(0, Math.min(days, room));
+      lwpDays = Math.max(0, days - paidDays);
+    }
+
     const app = await LeaveApplication.create({
       employeeId: emp._id,
       biometricId: emp.biometricId,
@@ -1248,6 +1243,7 @@ router.post("/add-on-behalf", EmployeeAuthMiddleware, async (req, res) => {
       halfDaySlot: isHalfDay ? halfDaySlot || "first_half" : null,
       numberOfDays: days,
       totalDays: days,
+      ...(bucket ? { paidDays, lwpDays } : {}),
       reason,
       hrRemarks: hrRemarks || "",
       status: "hr_approved",
@@ -1260,14 +1256,14 @@ router.post("/add-on-behalf", EmployeeAuthMiddleware, async (req, res) => {
     });
 
     // Clamped deduction — never goes above entitlement.
-    if (["CL", "SL", "PL"].includes(leaveType)) {
-      const year = new Date(startDate).getFullYear();
+    if (bucket && paidDays > 0) {
+      const year = parseLocalDate(fromStr).getFullYear();
       const config = await LeaveConfig.getConfig();
       const { applied } = await applyBalanceDelta({
         employeeId: emp._id,
         year,
         biometricId: emp.biometricId || "",
-        deltas: { [leaveType]: days },
+        deltas: { [leaveType]: paidDays },
         config,
       });
       const info = applied[leaveType];
@@ -1312,7 +1308,12 @@ router.post("/add-on-behalf", EmployeeAuthMiddleware, async (req, res) => {
     res.json({
       success: true,
       data: app,
-      message: `Leave added and approved for ${emp.firstName}`,
+      paidDays,
+      lwpDays,
+      message:
+        lwpDays > 0
+          ? `Leave added and approved for ${emp.firstName} — ${paidDays} day(s) paid and ${lwpDays} unpaid, because only ${room} ${leaveType} day(s) were left.`
+          : `Leave added and approved for ${emp.firstName}`,
     });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message });
@@ -1410,33 +1411,21 @@ router.get("/:id", EmployeeAuthMiddleware, async (req, res) => {
         .status(404)
         .json({ success: false, message: "Application not found" });
 
-    const year = new Date().getFullYear();
+    // The balance of the year the leave falls in (a January leave filed in
+    // December is January's business), by the same rules as the app.
     const empId = app.employeeId?._id || app.employeeId;
-    const rawBal = await LeaveBalance.findOne({
-      employeeId: empId,
-      year,
-    }).lean();
+    const year = /^\d{4}/.test(String(app.fromDate || ""))
+      ? Number(String(app.fromDate).slice(0, 4))
+      : new Date().getFullYear();
+    // A side panel, never a reason to fail the application itself.
     let employeeBalance = null;
-    if (rawBal) {
-      const available = {
-        CL: Math.max(0, (rawBal.entitlement.CL || 0) - (rawBal.consumed.CL || 0)),
-        SL: Math.max(0, (rawBal.entitlement.SL || 0) - (rawBal.consumed.SL || 0)),
-        PL: Math.max(0, (rawBal.entitlement.PL || 0) - (rawBal.consumed.PL || 0)),
-      };
-      // Additive only. `available` is unchanged — see the note on
-      // /employee-balance/:employeeId above.
-      const reserved = await computeReserved(empId, year);
-      employeeBalance = {
-        entitlement: rawBal.entitlement,
-        consumed: rawBal.consumed,
-        available,
-        reserved,
-        effectiveAvailable: {
-          CL: Math.max(0, available.CL - reserved.CL),
-          SL: Math.max(0, available.SL - reserved.SL),
-          PL: Math.max(0, available.PL - reserved.PL),
-        },
-      };
+    if (empId) {
+      try {
+        const { bal, config, plEligible, ...figures } = await balanceFor(empId, year);
+        employeeBalance = { year, ...figures };
+      } catch (e) {
+        console.warn("[LEAVE] balance for the drawer:", e.message);
+      }
     }
 
     res.json({ success: true, data: { ...app, employeeBalance } });
@@ -1638,6 +1627,9 @@ router.patch("/:id/cancel", EmployeeAuthMiddleware, async (req, res) => {
     app.cancelledAt = new Date();
     app.cancelReason = req.body?.cancelReason || "Withdrawn by HR";
     await app.save();
+
+    // The employee hears it from the app, not from their next payslip.
+    notifyLeaveCancelledByHR(app, { refunded, reason: req.body?.cancelReason || "" });
 
     res.json({
       success: true,

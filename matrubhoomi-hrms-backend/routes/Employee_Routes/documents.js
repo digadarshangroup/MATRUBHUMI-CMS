@@ -136,8 +136,13 @@ const visibleTo = (employeeId) => ({
   $or: [
     { released: true },
     { requestStatus: { $in: ["requested", "declined", "cancelled"] } },
-    // One I once had, that HR has since withdrawn.
-    { revokedAt: { $ne: null }, requestStatus: "fulfilled" },
+    // One I once had, that HR has since withdrawn — asked for or not. Only a
+    // released document can be revoked, and releasing it again clears
+    // revokedAt, so this is exactly "was mine, and was taken back". Before,
+    // a letter HR had sent unasked simply vanished, while the notification
+    // said "Document withdrawn" about something no longer on the screen.
+    // toEmployeeView gives an unreleased row no file, so nothing opens.
+    { revokedAt: { $ne: null } },
   ],
 });
 
