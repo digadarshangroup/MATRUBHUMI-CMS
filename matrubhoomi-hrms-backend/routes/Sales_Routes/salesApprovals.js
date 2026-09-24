@@ -117,7 +117,8 @@ router.post("/approvals/:id/approve", deskApprove, async (req, res) => {
 
     const io = req.app.get("io");
     if (io) {
-      io.emit("sales:approval", {
+      // The desk room, not every connected socket — see the note in fieldApp.js.
+      io.to("sales-desk").emit("sales:approval", {
         submissionId: String(result.submission._id),
         leadId: String(result.lead._id),
         decision: "approved",
@@ -151,7 +152,7 @@ router.post("/approvals/:id/reject", deskApprove, async (req, res) => {
 
     const io = req.app.get("io");
     if (io) {
-      io.emit("sales:approval", {
+      io.to("sales-desk").emit("sales:approval", {
         submissionId: String(result.submission._id),
         leadId: String(result.lead._id),
         decision: "rejected",

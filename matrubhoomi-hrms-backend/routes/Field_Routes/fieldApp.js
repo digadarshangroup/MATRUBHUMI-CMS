@@ -454,7 +454,10 @@ router.post("/submissions", async (req, res) => {
     // board sees the count move as the team works.
     const io = req.app.get("io");
     if (io && !result.duplicate) {
-      io.emit("sales:submission", {
+      // To the desk, not to everyone. This carries a customer's name and who
+      // visited them; io.emit() put it on every connected socket, authenticated
+      // or not.
+      io.to("sales-desk").emit("sales:submission", {
         leadId: String(result.lead._id),
         leadName: result.lead.name,
         stageKey: result.advancedTo,
@@ -546,12 +549,54 @@ router.post("/uploads", upload.array("photos", 6), async (req, res) => {
 /* OTP                                                                 */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Send the farmer a code.
+ *
+ * SCOPED TO THE CALLER'S OWN WORK. A code is a message to a member of the
+ * public, and an endpoint that sends one to any number an employee types is a
+ * way to make the company's SMS account ring somebody's phone all afternoon.
+ * Until this check existed any signed-in employee could raise a code against
+ * any customer they had nothing to do with.
+ *
+ * The rule is the one recordSubmission already applies when the code is spent:
+ * the task must be theirs, and the customer must be one of its targets. A code
+ * for a NEW customer has no lead yet and is allowed — that is the lead
+ * generation round, and the number is one the employee is standing in front of.
+ */
 router.post("/otp/send", async (req, res) => {
   try {
+    const leadId = req.body.leadId || null;
+
+    if (leadId) {
+      // Theirs by either route: a task that names this customer, or the
+      // customer being on their own book — which is how a lead they registered
+      // themselves under a quota task reaches them, since a quota task has no
+      // targets until the registrations land.
+      const [holdsTask, ownsLead] = await Promise.all([
+        SalesTask.exists({
+          assignedTo: req.employee.id,
+          "targets.leadId": leadId,
+          status: { $nin: ["cancelled", "expired"] },
+        }),
+        SalesLead.exists({
+          _id: leadId,
+          $or: [{ assignedTo: req.employee.id }, { createdBy: req.employee.id }],
+        }),
+      ]);
+
+      if (!holdsTask && !ownsLead) {
+        return res.status(403).json({
+          success: false,
+          code: "NOT_YOUR_CUSTOMER",
+          message: "You do not have a task for this customer.",
+        });
+      }
+    }
+
     const out = await issueOtp({
       phone: req.body.phone,
       purpose: req.body.purpose || "lead_verify",
-      leadId: req.body.leadId || null,
+      leadId,
       taskId: req.body.taskId || null,
       stageKey: req.body.stageKey || "",
       employee: req.employee,
@@ -568,9 +613,15 @@ router.post("/otp/verify", async (req, res) => {
 
     // A verified number is worth recording on the lead even if the visit is
     // abandoned before the form is submitted — the number is real either way.
-    if (req.body.leadId) {
+    //
+    // The lead is taken from the OTP row when the caller does not repeat it.
+    // It was written there when the code was issued, so requiring the client to
+    // send it again only meant that an app which left it out silently never
+    // marked the number verified.
+    const leadId = req.body.leadId || out.leadId || null;
+    if (leadId) {
       await SalesLead.updateOne(
-        { _id: req.body.leadId, phone: normalisePhone(req.body.phone) },
+        { _id: leadId, phone: normalisePhone(req.body.phone) },
         { $set: { phoneVerified: true, phoneVerifiedAt: new Date() } },
       );
     }

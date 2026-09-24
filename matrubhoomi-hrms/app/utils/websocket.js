@@ -1,5 +1,6 @@
 // app/utils/websocket.js
 import { io } from "socket.io-client";
+import { getSessionToken } from "@/lib/session";
 
 class WebSocketService {
     constructor() {
@@ -27,6 +28,15 @@ class WebSocketService {
             autoConnect: true,
             forceNew: false,
             withCredentials: true,
+            // The same token lib/authFetch.js puts on every REST call, for the
+            // same reason: the session cookie is third-party once the frontend
+            // and the backend are on different hosts, and the handshake then
+            // arrives with no identity at all.
+            //
+            // The server reads this to decide which rooms this socket may join.
+            // Without it the connection still works and simply hears nothing
+            // addressed to a particular person or desk.
+            auth: (cb) => cb({ token: getSessionToken() || undefined }),
         });
 
         this.setupEventListeners();

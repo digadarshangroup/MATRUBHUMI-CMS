@@ -151,6 +151,27 @@ async function ensureSalesDefaults() {
       await attachToStage(form.stageKey, created._id);
       console.log(`[sales] Seeded the "${form.name}" form template.`);
     }
+
+    // Two forms for eight steps. The other six cannot be assigned until the
+    // desk builds one, and the only place that used to be said was a 409 at the
+    // moment somebody tried — by which point they are on the assignment screen
+    // wondering what they did wrong. Said at boot, and again on the
+    // configuration screen (GET /api/sales/stages returns `needsForm`).
+    const unformed = await SalesStage.find({
+      pipelineKey: "default",
+      templateId: null,
+      isTerminal: { $ne: true },
+      isActive: true,
+    })
+      .select("name")
+      .lean();
+
+    if (unformed.length) {
+      console.log(
+        `[sales] ${unformed.length} step(s) have no form yet and cannot be assigned: ` +
+          `${unformed.map((s) => s.name).join(", ")}. Build one for each from Sales → Configuration.`,
+      );
+    }
   } catch (err) {
     // Never take the server down over defaults. Every screen this feeds renders
     // an empty state that says what to create, so a failure here is visible and

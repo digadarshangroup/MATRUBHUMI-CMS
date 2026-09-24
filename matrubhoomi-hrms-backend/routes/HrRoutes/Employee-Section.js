@@ -10,6 +10,10 @@ const {
   invalidateAppAccess,
 } = require("../../Middlewear/AllEmployeeAppMiddleware");
 const {
+  missingRequired,
+  requiredFieldsError,
+} = require("../../services/employeeValidation");
+const {
   encryptSalaryFields,
   decryptSalaryFields,
   decryptEmployeeDoc,
@@ -181,10 +185,70 @@ router.put("/config/salary", EmployeeAuthMiddlewear, async (req, res) => {
 });
 
 // ─── CREATE new employee ──────────────────────────────────────────────────────
+/**
+ * Is one of this person's identifying numbers already on somebody else's file?
+ *
+ * Every field here is an identity, not a detail: `email` and `phone` are how
+ * they sign in (and the phone IS the first password), `biometricId` is the key
+ * every attendance punch and payroll row is stored under, and the documents are
+ * the person themselves. A second record holding any of them means one of the
+ * two people can never sign in, and attendance for one shows up against the
+ * other.
+ *
+ * @returns the 409 body, or null when the record is clear
+ */
+async function findIdentityClash(data, excludeId = null) {
+  const FIELDS = [
+    { path: "email", value: (data.email || "").trim().toLowerCase(), label: "Employee Login (Email)" },
+    { path: "phone", value: (data.phone || "").trim(), label: "Mobile" },
+    { path: "biometricId", value: (data.biometricId || "").trim(), label: "Biometric ID" },
+    { path: "identityId", value: (data.identityId || "").trim(), label: "Identity ID" },
+    { path: "documents.aadharNumber", value: (data.documents?.aadharNumber || "").trim(), label: "Aadhaar number" },
+    { path: "documents.panNumber", value: (data.documents?.panNumber || "").trim(), label: "PAN number" },
+  ].filter((f) => f.value);
+
+  for (const f of FIELDS) {
+    const where = { [f.path]: f.value };
+    if (excludeId) where._id = { $ne: excludeId };
+    const holder = await Employee.findOne(where)
+      .select("firstName lastName employeeId biometricId")
+      .lean();
+    if (holder) {
+      const name = `${holder.firstName || ""} ${holder.lastName || ""}`.trim() || "another employee";
+      return {
+        success: false,
+        code: "DUPLICATE_IDENTITY",
+        message: `That ${f.label} is already on ${name}'s record.`,
+        fields: { [f.path]: `Already used by ${name}.` },
+      };
+    }
+  }
+  return null;
+}
+
 router.post("/", EmployeeAuthMiddlewear, async (req, res) => {
   try {
     const { user } = req;
     const employeeData = req.body;
+
+    // ── Is this a record anybody can use? ──────────────────────────────────
+    //
+    // Checked BEFORE anything is normalised or written. The form asks for all
+    // of this and marks it required, but the form is not the only way in here,
+    // and until this check existed `{ "gender": "Male" }` was enough to create
+    // an employee with no name, no email, no phone and no department.
+    const missing = missingRequired(employeeData);
+    if (missing.length) {
+      return res.status(400).json(requiredFieldsError(missing));
+    }
+
+    // ── Is anybody already using these? ────────────────────────────────────
+    //
+    // The unique indexes are the real guarantee; this is here so the answer is
+    // "Aadhaar is already on Ravi Sharma's record" rather than a raw E11000 the
+    // form cannot render against a field.
+    const clash = await findIdentityClash(employeeData);
+    if (clash) return res.status(409).json(clash);
 
     // Sanitize fields that are ObjectId references — empty string causes a BSONError cast fail
     const OBJECTID_FIELDS = [
@@ -275,14 +339,23 @@ router.post("/", EmployeeAuthMiddlewear, async (req, res) => {
       });
     }
 
-    // Password = employee's mobile number (fallback to "password123" if no phone)
-    const temporaryPassword =
-      (employeeData.phone || "").trim() || "password123";
+    // Their mobile number is their first password — it is the one thing both
+    // HR and the employee already know, and the app asks them to change it.
+    //
+    // There is no "password123" fallback any more. It used to apply to every
+    // employee saved without a phone number, which meant a shared, published
+    // password across an unknown number of accounts; a phone number is now
+    // required above, so the fallback had nothing left to cover.
+    const temporaryPassword = String(employeeData.phone || "").trim();
 
     const newEmployee = new Employee({
       ...employeeData,
       password: temporaryPassword,
-      temporaryPassword: temporaryPassword,
+      // NOT stored. It is derivable from `phone` for as long as it is unchanged,
+      // and keeping a second copy in clear text next to the bcrypt hash put a
+      // usable password for every employee into every backup and every dump of
+      // this collection.
+      temporaryPassword: undefined,
       createdBy: user.id,
       createdByName: user.name || "",
       createdAt: new Date(),
@@ -325,8 +398,10 @@ router.post("/", EmployeeAuthMiddlewear, async (req, res) => {
           // Don't include temporaryPassword here since it's passed separately
         };
 
-        console.log("Sending welcome email with data:", emailData);
-        console.log("With password:", temporaryPassword);
+        // The password is NOT logged. A boot log is copied into aggregators,
+        // screenshots and terminal scrollback, and this line put a working
+        // password for every new employee into all three.
+        console.log("Sending welcome email to:", emailData.email);
 
         emailService
           .sendWelcomeEmail(emailData, temporaryPassword)

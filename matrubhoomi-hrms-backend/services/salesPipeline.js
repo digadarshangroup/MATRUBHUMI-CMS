@@ -282,7 +282,21 @@ async function findByPhone(phone) {
   return SalesLead.findOne({ phone: mobile, isActive: true });
 }
 
-async function createLead({ payload, actor, task = null }) {
+/**
+ * Everything createLead has to decide, decided — and NOTHING written.
+ *
+ * Split out so a caller can find out which scheme, step and phone number a new
+ * customer would get, run its own checks, and only then commit. recordSubmission
+ * needs exactly that: it used to create the customer before it had checked the
+ * location fix, the photograph and the answers, so a visit refused for having no
+ * location still left a customer behind — and the employee's corrected retry
+ * was then refused with "already recorded", locking them out of their own task
+ * for that farmer with no way forward.
+ *
+ * Throws the same refusals in the same order as before, so nothing a caller
+ * already handles changes shape.
+ */
+async function resolveNewLead({ payload, actor }) {
   const phone = normalisePhone(payload.phone);
   if (!payload.name?.trim()) throw fail("A name is required");
   if (phone.length !== 10) throw fail("A valid 10-digit phone number is required");
@@ -334,6 +348,33 @@ async function createLead({ payload, actor, task = null }) {
         : "No sales stages are configured yet",
       409,
     );
+  }
+
+  return { payload, phone, scheme, stage };
+}
+
+/**
+ * Register a customer.
+ *
+ * `resolved` is what resolveNewLead already worked out, for a caller that
+ * needed to know before committing. Left out, this does the resolving itself —
+ * which is every other caller, unchanged.
+ */
+async function createLead({ payload, actor, task = null, resolved = null }) {
+  const { phone, scheme, stage } = resolved || (await resolveNewLead({ payload, actor }));
+
+  // Resolved a moment ago, committed now — and somebody else may have knocked
+  // on the same door in between. `phone` carries no unique index, so this
+  // second look is the only thing standing between two employees and two
+  // copies of one farmer.
+  if (resolved) {
+    const raced = await findByPhone(phone);
+    if (raced) {
+      throw fail(`${raced.name} is already recorded under ${raced.code}`, 409, {
+        leadId: String(raced._id),
+        code: raced.code,
+      });
+    }
   }
 
   const lead = await createWithCode(SalesLead, "lead", {
@@ -489,16 +530,34 @@ async function recordSubmission({ employee, input }) {
 
   let lead = leadId ? await SalesLead.findById(leadId) : null;
   if (leadId && !lead) throw fail("That lead no longer exists", 404);
+
+  // NOTHING IS WRITTEN UNTIL EVERY GATE BELOW HAS PASSED.
+  //
+  // A new customer is only RESOLVED here — name checked, number checked against
+  // the existing book, scheme and first step worked out — and is committed
+  // further down, once the location fix, the photograph and the answers have all
+  // been accepted. Creating them here instead meant a visit refused for having
+  // no location still left a customer record behind, and the employee's
+  // corrected retry was then refused as a duplicate of the ghost the refusal
+  // had just made.
+  let pendingLead = null;
   if (!lead) {
     if (!newLead) throw fail("Either an existing lead or the details of a new one are required");
-    lead = await createLead({ payload: { ...newLead, stageKey: task?.stageKey || newLead.stageKey }, actor, task });
+    pendingLead = await resolveNewLead({
+      payload: { ...newLead, stageKey: task?.stageKey || newLead.stageKey },
+      actor,
+    });
   }
 
   // Which of the two workflows produced this. Needed here as well as below,
   // because it decides which document the step is read from.
   const createdNewLead = !leadId;
 
-  const pipelineKey = lead.pipelineKey || "default";
+  // The step and the number, read from whichever of the two exists yet.
+  const leadPhone = lead ? lead.phone : pendingLead.phone;
+  const leadStageKey = lead ? lead.stageKey : pendingLead.stage.key;
+
+  const pipelineKey = (lead ? lead.pipelineKey : pendingLead.stage.pipelineKey) || "default";
 
   // THE STEP BELONGS TO THE CUSTOMER, NOT TO THE TASK.
   //
@@ -511,7 +570,7 @@ async function recordSubmission({ employee, input }) {
   // For a follow-up the task's step is authoritative and is used as given: it
   // was snapshotted at assignment precisely so that it does NOT drift to
   // wherever the customer has since moved.
-  const stageKey = createdNewLead ? lead.stageKey : task?.stageKey || input.stageKey || lead.stageKey;
+  const stageKey = createdNewLead ? leadStageKey : task?.stageKey || input.stageKey || leadStageKey;
   const stage = await getStage(stageKey, pipelineKey);
   if (!stage) {
     throw fail(
@@ -548,7 +607,7 @@ async function recordSubmission({ employee, input }) {
   if (needsOtp && progressing) {
     otpRow = await consumeOtp(otpId, null);
     if (!otpRow) throw fail("This stage needs the customer's phone verified before it can be recorded", 428);
-    if (normalisePhone(otpRow.phone) !== normalisePhone(lead.phone)) {
+    if (normalisePhone(otpRow.phone) !== normalisePhone(leadPhone)) {
       throw fail("The verified number does not match this lead's phone number", 409);
     }
   }
@@ -580,6 +639,15 @@ async function recordSubmission({ employee, input }) {
   const { values: cleanValues, labels, errors } = validateValues(template, values, cleanPhotos);
   if (errors.length && progressing) throw fail(errors.join("; "), 422, { fields: errors });
 
+  /* ── Every gate is behind us; the customer may exist now ───────── */
+  //
+  // This is the first write of the request. Anything refused above left the
+  // book exactly as it found it, so the employee can fix what was wrong and
+  // send the same visit again.
+  if (!lead) {
+    lead = await createLead({ payload: pendingLead.payload, actor, task, resolved: pendingLead });
+  }
+
   /* ── Is this the employee's word, or the organisation's? ────────── */
   //
   // The step decides. With approval on — the default — this submission is a
@@ -597,11 +665,22 @@ async function recordSubmission({ employee, input }) {
   const needsApproval = progressing && advance && stage.requiresApproval !== false;
 
   // The approval queue and the task counters both filter on this.
-  const kind = createdNewLead
-    ? "new_customer"
-    : task?.type === "follow_up"
-      ? "follow_up"
-      : "other";
+  //
+  // A customer who has never been accepted into the book — refused, or still
+  // waiting — is still being REGISTERED, however many times it takes. The
+  // second attempt arrives carrying a leadId, because the row already exists,
+  // and reading only that made it look like a follow-up: approving it advanced
+  // them a step instead of accepting the registration, and left the refusal
+  // standing on their record, which barred them from every future assignment.
+  const stillRegistering =
+    !createdNewLead && ["pending_approval", "rejected"].includes(lead.status);
+
+  const kind =
+    createdNewLead || stillRegistering
+      ? "new_customer"
+      : task?.type === "follow_up"
+        ? "follow_up"
+        : "other";
 
   /* ── Did the world move while this sat in the outbox? ───────────── */
   //

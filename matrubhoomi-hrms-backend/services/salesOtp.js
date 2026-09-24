@@ -141,7 +141,15 @@ async function verifyOtp({ otpId, phone, code }) {
   row.attempts += 1;
   await row.save();
 
-  return { verified: true, otpId: String(row._id), phone: row.phone, verifiedAt: row.verifiedAt };
+  // `leadId` travels back so the caller does not have to repeat what this row
+  // already knows — see the note at the /otp/verify route.
+  return {
+    verified: true,
+    otpId: String(row._id),
+    phone: row.phone,
+    verifiedAt: row.verifiedAt,
+    leadId: row.leadId ? String(row.leadId) : null,
+  };
 }
 
 /**

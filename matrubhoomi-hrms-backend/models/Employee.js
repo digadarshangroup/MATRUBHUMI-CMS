@@ -30,7 +30,12 @@ const employeeSchema = new mongoose.Schema({
     type: String,
     lowercase: true,
     trim: true,
-    sparse: true, // unique when provided, allows multiple null/undefined
+    // NO `sparse: true` here. Declaring an index on the path AND again with
+    // schema.index() below produced two declarations for the same key, and
+    // MongoDB keeps the first one it is given — which was this one, WITHOUT
+    // unique. The result looked indexed and enforced nothing: two employees
+    // could hold one login address, and only the older of them could ever sign
+    // in. The one declaration that matters is at the bottom of this file.
   },
   password: { type: String },
   temporaryPassword: { type: String, select: false },
@@ -90,8 +95,9 @@ const employeeSchema = new mongoose.Schema({
   personalCustomFields: { type: [customFieldSchema], default: [] },
 
   // ─── WORK INFORMATION ────────────────────────────────────────────────────────
-  biometricId: { type: String, sparse: true },
-  identityId: { type: String, sparse: true },
+  // Indexed at the bottom of this file, not here — see the note on `email`.
+  biometricId: { type: String },
+  identityId: { type: String },
   needsToOperate: { type: Boolean, default: false },
 
   department: { type: String },
@@ -464,9 +470,31 @@ const employeeSchema = new mongoose.Schema({
 });
 
 // ─── INDEXES ────────────────────────────────────────────────────────────────────
+//
+// THE ONLY PLACE ANY OF THESE IS DECLARED. Declaring an index here and again on
+// the path above gives MongoDB two definitions of one key; it keeps the first
+// and silently ignores the second, so `unique` was being dropped on the floor
+// for all three of these. The boot log has been saying so for as long as it has
+// existed ("Duplicate schema index on {email:1} found").
+//
+// These identify a PERSON. A duplicate is not untidy data — a second record
+// holding one of these numbers means one of the two people can never sign in,
+// and their attendance and payroll land on the other one's file.
 employeeSchema.index({ biometricId: 1 }, { unique: true, sparse: true });
 employeeSchema.index({ identityId: 1 }, { unique: true, sparse: true });
 employeeSchema.index({ email: 1 }, { unique: true, sparse: true });
+
+// The login identity, and the first password with it. `sparse` is not enough
+// here: it skips null and undefined but still indexes "", and an employee saved
+// without a number stores an empty string — so two of them would collide with
+// each other. A partial index covers exactly the rows that carry a number.
+employeeSchema.index(
+  { phone: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { phone: { $type: "string", $gt: "" } },
+  },
+);
 
 // ─── PRE-SAVE HOOKS ──────────────────────────────────────────────────────────────
 employeeSchema.pre("save", async function (next) {

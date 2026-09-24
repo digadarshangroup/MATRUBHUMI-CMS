@@ -121,11 +121,85 @@ const io = new Server(server, {
   transports: ["websocket", "polling"],
 });
 
-io.on("connection", (socket) => {
-  console.log("✅ WebSocket client connected:", socket.id);
+/* ─── Who is on the other end of the socket ───────────────────────────────
+ *
+ * The socket used to ask nobody anything. A client could connect with no
+ * cookie and no token, emit `join_employee` with ANY employee's id, and
+ * receive that person's task assignments — and the two sales events were sent
+ * with `io.emit`, which is every connected client, so customer names and who
+ * visited them were broadcast to anyone who opened a socket.
+ *
+ * So: the token is read here if there is one, the ROOM IS DERIVED FROM IT
+ * rather than from whatever the client asks for, and desk events go to a desk
+ * room instead of to everyone.
+ *
+ * SOCKET_REQUIRE_AUTH=true refuses an unauthenticated handshake outright. It is
+ * off by default on purpose — the Android field app is a separate repository and
+ * may not be sending its token on the handshake yet, and refusing it here would
+ * take away its live task notifications before it can be updated. With the room
+ * derived from the token it already receives nothing it should not; the switch
+ * is there for once every client is known to send one.
+ */
+const REQUIRE_SOCKET_AUTH = String(process.env.SOCKET_REQUIRE_AUTH || "") === "true";
 
-  socket.on("join_employee", (employeeId) => {
-    socket.join(`employee-${employeeId}`);
+function identifySocket(socket) {
+  const { verifyToken } = require("./config/jwt");
+  const handshake = socket.handshake || {};
+
+  let token =
+    handshake.auth?.token ||
+    handshake.query?.token ||
+    (typeof handshake.headers?.authorization === "string" &&
+    handshake.headers.authorization.startsWith("Bearer ")
+      ? handshake.headers.authorization.slice(7)
+      : null);
+
+  if (!token && handshake.headers?.cookie) {
+    const match = handshake.headers.cookie.match(/(?:auth_token|employee_token)=([^;]+)/);
+    if (match) token = match[1];
+  }
+
+  if (!token) return null;
+
+  try {
+    const decoded = verifyToken(token);
+    return {
+      id: decoded.id ? String(decoded.id) : null,
+      // An app token says so; a desk token carries a role instead.
+      type: decoded.type || "desk",
+      deptSlug: decoded.deptSlug || "",
+      isAdmin: Boolean(decoded.isAdmin),
+    };
+  } catch {
+    return null;
+  }
+}
+
+io.use((socket, next) => {
+  const user = identifySocket(socket);
+  if (!user && REQUIRE_SOCKET_AUTH) {
+    return next(new Error("Not authorised"));
+  }
+  socket.data.user = user;
+  next();
+});
+
+io.on("connection", (socket) => {
+  const user = socket.data.user;
+  console.log(
+    `✅ WebSocket client connected: ${socket.id}${user ? ` (${user.type})` : " (anonymous)"}`,
+  );
+
+  // A desk session listens to the desk's own events. Nobody else is put in
+  // this room, so a field handset never hears the approval queue.
+  if (user && user.type === "desk") socket.join("sales-desk");
+
+  // THE ID IS NOT TAKEN FROM THE CLIENT. It is whoever the token says they
+  // are; the argument is kept only so an older app still calls this and lands
+  // in the right place.
+  socket.on("join_employee", () => {
+    if (!user?.id) return;
+    socket.join(`employee-${user.id}`);
   });
 
   socket.on("disconnect", () => {

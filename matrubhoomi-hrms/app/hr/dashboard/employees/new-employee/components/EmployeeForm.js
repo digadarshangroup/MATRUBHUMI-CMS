@@ -46,6 +46,16 @@ const INP_DISABLED =
 
 const SEL = `${INP} cursor-pointer appearance-none pr-9`;
 
+// A field that failed validation. Same material, drawn in the overdue ink —
+// the ring is the only difference, so a flagged field still reads as the same
+// control and not as a different kind of box.
+const INP_ERROR =
+  "w-full rounded-inset bg-[var(--surface-raised)] px-3.5 py-2.5 text-sm text-ink placeholder:text-ink-faint " +
+  "shadow-[inset_0_0_0_1.5px_var(--state-overdue)] transition-shadow duration-[180ms] " +
+  "focus:shadow-[inset_0_0_0_2px_var(--state-overdue)] focus:outline-none disabled:opacity-50";
+
+const SEL_ERROR = `${INP_ERROR} cursor-pointer appearance-none pr-9`;
+
 const SEL_ARROW = {
   backgroundImage:
     "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5L6 6.5L11 1.5' stroke='%23888' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E\")",
@@ -188,6 +198,8 @@ function TI({
   disabled,
   placeholder,
   hint,
+  required,
+  error,
   ...props
 }) {
   const inputRef = useRef(null);
@@ -218,33 +230,37 @@ function TI({
 
   return (
     <div>
-      <div className="mb-1.5 flex items-center gap-1">
+      <div className="mb-1.5 flex items-center gap-1.5">
         <p className="text-sm font-medium text-ink">{label}</p>
+        {required && <RequiredMark />}
         {hint}
       </div>
       <input
         ref={inputRef}
         data-figure={type === "number" || type === "date" ? "" : undefined}
-        className={disabled ? INP_DISABLED : INP}
+        className={disabled ? INP_DISABLED : error ? INP_ERROR : INP}
         type={type}
         value={value || ""}
         onChange={handleChange}
         disabled={disabled}
         placeholder={placeholder}
+        aria-invalid={error ? "true" : undefined}
         {...props}
       />
+      <FieldError message={error} />
     </div>
   );
 }
 
-function SI({ label, value, onChange, children, ...props }) {
+function SI({ label, value, onChange, children, required, error, ...props }) {
   return (
-    <Field label={label}>
+    <Field label={label} required={required} error={error}>
       <select
-        className={SEL}
+        className={error ? SEL_ERROR : SEL}
         style={SEL_ARROW}
         value={value || ""}
         onChange={onChange}
+        aria-invalid={error ? "true" : undefined}
         {...props}
       >
         {children}
@@ -269,12 +285,39 @@ function CHK({ label, checked, onChange }) {
   );
 }
 
-function Fld({ label, children }) {
+function Fld({ label, required, error, children }) {
   return (
     <div>
-      <span className="mb-1.5 block text-sm font-medium text-ink">{label}</span>
+      <span className="mb-1.5 flex items-center gap-1.5">
+        <span className="text-sm font-medium text-ink">{label}</span>
+        {required && <RequiredMark />}
+      </span>
       {children}
+      <FieldError message={error} />
     </div>
+  );
+}
+
+// ─── REQUIRED / ERROR MARKERS ─────────────────────────────────────────────────
+// The kit's Field already draws both of these; these two exist so the controls
+// in this file that cannot use Field — TI, which owns its own ref, and Fld,
+// which wraps a bare <select> — say the same thing in the same words.
+
+/** Said before they fill it in, so nobody reaches Save to find out. */
+function RequiredMark() {
+  return <span className="text-[11px] text-ink-faint">Required</span>;
+}
+
+/** Said after: what is wrong with THIS field, under THIS field. */
+function FieldError({ message }) {
+  if (!message) return null;
+  return (
+    <span
+      role="alert"
+      className="mt-1.5 block text-xs text-[var(--state-overdue-ink)]"
+    >
+      {message}
+    </span>
   );
 }
 
@@ -327,6 +370,7 @@ function Sec({
   onSave,
   onCancel,
   saving,
+  missing = 0,
   children,
 }) {
   return (
@@ -335,6 +379,14 @@ function Sec({
         title={title}
         aside={
           <div className="flex items-center gap-2">
+            {/* A section with a blank required field says so in its own header,
+                so the count is visible while scrolling past a collapsed-looking
+                block of filled-in fields. */}
+            {missing > 0 && (
+              <span className="rounded-full bg-[color-mix(in_srgb,var(--state-overdue)_18%,transparent)] px-2.5 py-1 text-[11px] font-medium text-[var(--state-overdue-ink)]">
+                {missing} missing
+              </span>
+            )}
             {/* Editing is an editor+ action. A viewer sees the record but never
                 the pencil; the server enforces the same, so hiding it is only
                 courtesy. */}
@@ -383,6 +435,140 @@ function Sec({
     </Panel>
   );
 }
+
+// ─── REQUIRED FIELDS ──────────────────────────────────────────────────────────
+// The one place that decides what a saveable employee record needs. The form
+// reads this list four ways — the "Required" marker beside the label, the
+// message under the field, the count on the section header, and the summary
+// above Save — so a field is declared required once and shows up in all four.
+//
+// The order is the order the fields appear on the form. That is what makes
+// "the first missing one" mean the first one they would have reached.
+//
+//   key      · the form field
+//   label    · what the summary calls it, matching the label on screen
+//   section  · which Sec it lives in, for the per-section count and save
+//   when     · the rule only applies to records of this shape
+//   ok       · passes this instead of "not blank"
+//   message  · said under the field, instead of the default
+
+/** A plain email check — enough to catch a typo, not enough to argue with. */
+const looksLikeEmail = (v) =>
+  /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v || "").trim());
+
+const isBlank = (v) => v === undefined || v === null || String(v).trim() === "";
+
+const REQUIRED_MESSAGE = "This field is required.";
+
+const REQUIRED = [
+  { key: "firstName", label: "First Name", section: "empInfo" },
+  { key: "lastName", label: "Last Name", section: "empInfo" },
+  {
+    key: "email",
+    label: "Employee Login (Email)",
+    section: "empInfo",
+    // Required, because it IS the login. An employee saved without one has no
+    // way into the app and nobody finds out until they try.
+    ok: (f) => looksLikeEmail(f.email),
+    message: (f) =>
+      isBlank(f.email)
+        ? "This field is required — it is how they sign in."
+        : "Enter a valid email address, like name@company.com.",
+  },
+  {
+    key: "phone",
+    label: "Mobile",
+    section: "empInfo",
+    message: () =>
+      "This field is required — it is also their first password.",
+  },
+  { key: "departmentId", label: "Department", section: "work" },
+  { key: "designation", label: "Designation", section: "work" },
+  { key: "dateOfJoining", label: "Date of Joining", section: "work" },
+  {
+    key: "confirmationDate",
+    label: "Confirmation Date",
+    section: "work",
+    // An internship ends on a date instead of confirming, so this does not
+    // apply to one.
+    when: (f) => f.employmentType !== "intern",
+    message: () =>
+      "This field is required. It may be the same as the date of joining.",
+  },
+  { key: "employmentType", label: "Employment Type", section: "work" },
+  {
+    key: "workShiftMode",
+    label: "Shift",
+    section: "work",
+    // Everybody belongs to exactly one of the three — attendance has no fourth
+    // answer to fall back on, and a person saved without one gets judged
+    // against hours nobody chose for them.
+    message: () => "This field is required — pick Core, General or Custom.",
+  },
+  {
+    key: "workShiftStart",
+    label: "Shift Starts",
+    section: "work",
+    when: (f) => f.workShiftMode === "custom",
+  },
+  {
+    key: "workShiftEnd",
+    label: "Shift Ends",
+    section: "work",
+    when: (f) => f.workShiftMode === "custom",
+  },
+  {
+    key: "stipend",
+    label: "Monthly Stipend",
+    section: "salary",
+    // A paid internship with no amount is the one case that is certainly a
+    // mistake rather than a choice — unpaid and self-paid are legitimately
+    // zero. Payroll refuses to recalculate that row for the same reason.
+    when: (f) => f.employmentType === "intern" && f.internStipendType === "paid",
+    ok: (f) => Number(f.stipend) > 0,
+    message: () =>
+      "This internship is marked as paid — set the monthly stipend, or change " +
+      "the arrangement to unpaid or self-paid.",
+  },
+  {
+    key: "grossSalary",
+    label: "Gross Salary",
+    section: "salary",
+    when: (f) => f.employmentType !== "intern",
+    ok: (f) => Number(f.grossSalary) > 0,
+    message: () =>
+      "This field is required — every payroll component is derived from it.",
+  },
+];
+
+/** The rules that apply to the record as it currently stands. */
+const rulesFor = (form) => REQUIRED.filter((r) => !r.when || r.when(form));
+
+/** True when this field is required for THIS record — drives the marker. */
+const isRequired = (form, key) => rulesFor(form).some((r) => r.key === key);
+
+/** The required fields still not filled in, in form order. */
+const missingRequired = (form, section) =>
+  rulesFor(form)
+    .filter((r) => !section || r.section === section)
+    .filter((r) => (r.ok ? !r.ok(form) : isBlank(form[r.key])));
+
+/**
+ * Put the cursor where the fix has to happen.
+ *
+ * Found by attribute rather than by ref: the same lookup then works for the
+ * inputs TI renders, the bare selects under Fld, and anything added later,
+ * without every control having to be handed a ref it otherwise has no use for.
+ */
+const focusField = (key) => {
+  if (typeof document === "undefined") return;
+  const el = document.querySelector(`[data-field="${key}"]`);
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  // preventScroll, or the browser jumps the field to the top and fights the
+  // smooth scroll above on the way there.
+  el.focus({ preventScroll: true });
+};
 
 // ─── BLANK STATE ──────────────────────────────────────────────────────────────
 const BLANK = {
@@ -646,6 +832,62 @@ function FileField({
   );
 }
 
+// ─── MISSING-FIELD SUMMARY ────────────────────────────────────────────────────
+/**
+ * Why the save did not happen, and what to do about it.
+ *
+ * Rendered twice: once at the top of the form, and once beside Save — which is
+ * the one that matters, because that is where they are standing when nothing
+ * happens. Each field is a button, so the list is also the way to reach them;
+ * "scroll up and look for red" is not an instruction anyone should be given.
+ */
+function MissingSummary({ fields, onDismiss }) {
+  if (!fields.length) return null;
+  return (
+    <div
+      role="alert"
+      className="rounded-inset bg-[color-mix(in_srgb,var(--state-overdue)_16%,transparent)] px-3.5 py-3"
+    >
+      <div className="flex items-start gap-2.5">
+        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--state-overdue-ink)]" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-[var(--state-overdue-ink)]">
+            {fields.length === 1
+              ? "One required field is still empty, so nothing was saved."
+              : `${fields.length} required fields are still empty, so nothing was saved.`}
+          </p>
+          <p className="mt-0.5 text-xs text-[var(--state-overdue-ink)] opacity-80">
+            Pick one to jump to it.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {fields.map((f) => (
+              <button
+                key={f.key}
+                type="button"
+                onClick={() => focusField(f.key)}
+                className="rounded-full bg-[var(--control)] px-2.5 py-1 text-[11px] font-medium text-ink transition-colors hover:bg-[var(--control-hover)]"
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {onDismiss && (
+          <Button
+            tone="ghost"
+            size="sm"
+            type="button"
+            onClick={onDismiss}
+            aria-label="Dismiss"
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── MAIN ─────────────────────────────────────────────────────────────────────
 export default function EmployeeForm() {
   const router = useRouter();
@@ -677,6 +919,9 @@ export default function EmployeeForm() {
   const [submitting, setSubmitting] = useState(false);
   const [savingSec, setSavingSec] = useState(null);
   const [error, setError] = useState(null);
+  // Which required fields came back empty on the last save attempt. Set only
+  // by a save — the form does not go red while it is still being filled in.
+  const [fieldErrors, setFieldErrors] = useState({});
   const [uploadingFile, setUploadingFile] = useState(null);
   const [files, setFiles] = useState({
     profilePhoto: null,
@@ -981,9 +1226,29 @@ export default function EmployeeForm() {
   };
 
   // ── Helpers ───────────────────────────────────────────────────────────────
-  const setField = useCallback((key, value) => {
-    setForm((prev) => ({ ...prev, [key]: value }));
+  /**
+   * Take the mark off a field.
+   *
+   * On the first keystroke, not on blur: a field still being typed into that
+   * stays red reads as "what you are entering is wrong", which it is not —
+   * the complaint was that it was empty, and it no longer is.
+   */
+  const clearFieldError = useCallback((...keys) => {
+    setFieldErrors((prev) => {
+      if (!keys.some((k) => prev[k])) return prev;
+      const next = { ...prev };
+      keys.forEach((k) => delete next[k]);
+      return next;
+    });
   }, []);
+
+  const setField = useCallback(
+    (key, value) => {
+      setForm((prev) => ({ ...prev, [key]: value }));
+      clearFieldError(key);
+    },
+    [clearFieldError],
+  );
 
   const onDeptChange = (deptId) => {
     const dept = depts.find((d) => d.id === deptId);
@@ -996,6 +1261,7 @@ export default function EmployeeForm() {
       // Only clear designation if the department actually changed
       designation: deptId !== prev.departmentId ? "" : prev.designation,
     }));
+    clearFieldError("departmentId");
     // Prefill the managers assigned to this department (set on the Departments
     // page). Whoever fills the form can still override them; leaving them alone
     // means the backend applies the same defaults on save.
@@ -1117,6 +1383,7 @@ export default function EmployeeForm() {
 
   // onSalaryChange — triggers recalc; EPF/EDLI/admin edits set override flag
   const onSalaryChange = (field, value) => {
+    clearFieldError(field);
     setForm((prev) => {
       const next = { ...prev, [field]: value };
       if (field === "epf") next.epfOverride = true;
@@ -1212,11 +1479,13 @@ export default function EmployeeForm() {
   const startEdit = (id) => {
     setSnap(form);
     setEditSec(id);
+    setFieldErrors({});
   };
 
   const cancelEdit = () => {
     setForm(snap);
     setEditSec(isAddMode ? "__all__" : null);
+    setFieldErrors({});
   };
 
   const buildPayload = () => {
@@ -1460,7 +1729,48 @@ export default function EmployeeForm() {
     return payload;
   };
 
+  // ── Required-field validation ─────────────────────────────────────────────
+  /**
+   * Check the required fields, mark the ones that are empty, and put the
+   * cursor in the first of them. Returns false when anything is missing, and
+   * nothing is sent — the record is never half-saved and then complained about.
+   *
+   * `section` limits the check to one section's own fields, for the
+   * section-by-section save on an existing record: a confirmation date missing
+   * from a record created before it was required should not block an unrelated
+   * address edit years later.
+   */
+  const validateRequired = (section) => {
+    const missing = missingRequired(form, section);
+
+    const found = {};
+    missing.forEach((r) => {
+      found[r.key] = r.message ? r.message(form) : REQUIRED_MESSAGE;
+    });
+
+    setFieldErrors((prev) => {
+      if (!section) return found;
+      // Re-checking one section leaves the other sections' marks alone, but
+      // clears the ones in this section that have since been filled in.
+      const next = { ...prev };
+      rulesFor(form)
+        .filter((r) => r.section === section)
+        .forEach((r) => delete next[r.key]);
+      return { ...next, ...found };
+    });
+
+    if (!missing.length) return true;
+
+    // The summary and the per-field messages say what is wrong; the banner is
+    // left for the server's answers, so the two never stack up saying the same
+    // thing twice.
+    setError(null);
+    focusField(missing[0].key);
+    return false;
+  };
+
   const saveSection = async (id) => {
+    if (!validateRequired(id)) return;
     setSavingSec(id);
     setError(null);
     try {
@@ -1482,53 +1792,11 @@ export default function EmployeeForm() {
     }
   };
 
-  /** A plain email check — enough to catch a typo, not enough to argue with. */
-  const looksLikeEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v || "").trim());
-
   const handleSubmit = async () => {
-    // Required, because it IS the login. An employee saved without one has no
-    // way into the app and nobody finds out until they try.
-    if (!looksLikeEmail(form.email)) {
-      setError("Employee Login (Email) is required — it is how they sign in.");
-      return;
-    }
-    if (!isIntern && !form.confirmationDate) {
-      setError(
-        "Confirmation Date is required. It may be the same as the date of joining.",
-      );
-      return;
-    }
+    // Every required field, in one pass, before anything is sent. What each
+    // one is and why lives in REQUIRED at the top of this file.
+    if (!validateRequired()) return;
 
-    // Everybody belongs to exactly one of the three shifts — attendance has no
-    // fourth answer to fall back on any more, and a person saved without one
-    // gets judged against hours nobody chose for them. Checked here rather
-    // than left to the server because this is the screen that can point at
-    // the field.
-    if (!form.workShiftMode) {
-      setError("Pick a shift under Work — Core, General or Custom.");
-      return;
-    }
-    if (
-      form.workShiftMode === "custom" &&
-      (!form.workShiftStart || !form.workShiftEnd)
-    ) {
-      setError("A custom shift needs its start and end time.");
-      return;
-    }
-    // A paid internship with no amount is the one case that is certainly a
-    // mistake rather than a choice — unpaid and self-paid are legitimately
-    // zero. Payroll refuses to recalculate that row for the same reason.
-    if (
-      isIntern &&
-      form.internStipendType === "paid" &&
-      !(Number(form.stipend) > 0)
-    ) {
-      setError(
-        "This internship is marked as paid — set the monthly stipend, or " +
-          "change the arrangement to unpaid or self-paid.",
-      );
-      return;
-    }
     setSubmitting(true);
     setError(null);
     try {
@@ -1539,6 +1807,20 @@ export default function EmployeeForm() {
         body: JSON.stringify(buildPayload()),
       });
       const data = await res.json();
+
+      // The server checks the same list this form does, and refuses a record
+      // nothing downstream can use — including the identity numbers this form
+      // cannot check, like an Aadhaar already on somebody else's file. When it
+      // names the fields, they are marked here exactly as a local failure is,
+      // and the cursor goes to the first of them.
+      if (!res.ok && data?.fields && typeof data.fields === "object") {
+        setFieldErrors(data.fields);
+        setError(data.message || null);
+        const first = rulesFor(form).find((r) => data.fields[r.key]);
+        focusField(first ? first.key : Object.keys(data.fields)[0]);
+        return;
+      }
+
       if (!res.ok) throw new Error(data.message || `Error ${res.status}`);
       if (data.success) {
         alert("Employee created successfully!");
@@ -1554,6 +1836,17 @@ export default function EmployeeForm() {
   };
 
   const ed = (id) => editSec === "__all__" || editSec === id;
+
+  // What the last save attempt found missing, still missing. Derived from the
+  // marks rather than kept as a second list, so filling a field in removes it
+  // from the summary, the section count and the field itself at the same time.
+  const flagged = useMemo(
+    () => rulesFor(form).filter((r) => fieldErrors[r.key]),
+    [form, fieldErrors],
+  );
+  const missingIn = (section) =>
+    flagged.filter((r) => r.section === section).length;
+  const req = (key) => isRequired(form, key);
 
   const defaultAvatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(
     `${form.firstName} ${form.lastName}`.trim() || "E",
@@ -1587,6 +1880,15 @@ export default function EmployeeForm() {
         </div>
       )}
 
+      {flagged.length > 0 && (
+        <div className="mb-4">
+          <MissingSummary
+            fields={flagged}
+            onDismiss={() => setFieldErrors({})}
+          />
+        </div>
+      )}
+
       <div className="space-y-4">
         {/* Employee Information Section */}
         <Sec
@@ -1597,6 +1899,7 @@ export default function EmployeeForm() {
           onSave={isAddMode ? null : saveSection}
           onCancel={cancelEdit}
           saving={savingSec === "empInfo"}
+          missing={missingIn("empInfo")}
         >
           {ed("empInfo") ? (
             <>
@@ -1662,12 +1965,18 @@ export default function EmployeeForm() {
                 label="First Name"
                 value={form.firstName}
                 onChange={(e) => setField("firstName", e.target.value)}
+                data-field="firstName"
+                required={req("firstName")}
+                error={fieldErrors.firstName}
               />
 
               <TI
                 label="Last Name"
                 value={form.lastName}
                 onChange={(e) => setField("lastName", e.target.value)}
+                data-field="lastName"
+                required={req("lastName")}
+                error={fieldErrors.lastName}
               />
               <TI
                 label="Middle Name"
@@ -1675,16 +1984,22 @@ export default function EmployeeForm() {
                 onChange={(e) => setField("middleName", e.target.value)}
               />
               <TI
-                label="Employee Login (Email) *"
+                label="Employee Login (Email)"
                 type="email"
                 value={form.email}
                 onChange={(e) => setField("email", e.target.value)}
+                data-field="email"
+                required={req("email")}
+                error={fieldErrors.email}
               />
               <TI
                 label="Mobile"
                 type="tel"
                 value={form.phone}
                 onChange={(e) => setField("phone", e.target.value)}
+                data-field="phone"
+                required={req("phone")}
+                error={fieldErrors.phone}
               />
 
               <TI
@@ -1745,6 +2060,7 @@ export default function EmployeeForm() {
           onSave={isAddMode ? null : saveSection}
           onCancel={cancelEdit}
           saving={savingSec === "personal"}
+          missing={missingIn("personal")}
         >
           {ed("personal") ? (
             <>
@@ -1939,15 +2255,22 @@ export default function EmployeeForm() {
           onSave={isAddMode ? null : saveSection}
           onCancel={cancelEdit}
           saving={savingSec === "work"}
+          missing={missingIn("work")}
         >
           {ed("work") ? (
             <>
-              <Fld label="Department">
+              <Fld
+                label="Department"
+                required={req("departmentId")}
+                error={fieldErrors.departmentId}
+              >
                 <select
-                  className={SEL}
+                  className={fieldErrors.departmentId ? SEL_ERROR : SEL}
                   style={SEL_ARROW}
                   value={form.departmentId}
                   onChange={(e) => onDeptChange(e.target.value)}
+                  data-field="departmentId"
+                  aria-invalid={fieldErrors.departmentId ? "true" : undefined}
                 >
                   <option value="">—</option>
                   {depts.map((d) => (
@@ -1957,13 +2280,19 @@ export default function EmployeeForm() {
                   ))}
                 </select>
               </Fld>
-              <Fld label="Designation">
+              <Fld
+                label="Designation"
+                required={req("designation")}
+                error={fieldErrors.designation}
+              >
                 <select
-                  className={SEL}
+                  className={fieldErrors.designation ? SEL_ERROR : SEL}
                   style={SEL_ARROW}
                   value={form.designation}
                   onChange={(e) => setField("designation", e.target.value)}
                   disabled={!form.departmentId}
+                  data-field="designation"
+                  aria-invalid={fieldErrors.designation ? "true" : undefined}
                 >
                   <option value="">—</option>
                   {desigs.map((d, i) => (
@@ -2019,16 +2348,22 @@ export default function EmployeeForm() {
                 type="date"
                 value={form.dateOfJoining}
                 onChange={(e) => setField("dateOfJoining", e.target.value)}
+                data-field="dateOfJoining"
+                required={req("dateOfJoining")}
+                error={fieldErrors.dateOfJoining}
               />
               {/* An internship has an end date, not a probation leading to
                   confirmation. Those two fields live in the Internship block
                   on the salary section instead. */}
               {!isIntern && (
                 <TI
-                  label="Confirmation Date *"
+                  label="Confirmation Date"
                   type="date"
                   value={form.confirmationDate}
                   onChange={(e) => setField("confirmationDate", e.target.value)}
+                  data-field="confirmationDate"
+                  required={req("confirmationDate")}
+                  error={fieldErrors.confirmationDate}
                   hint={
                     <FHint
                       formula="May be the same as the date of joining"
@@ -2049,6 +2384,9 @@ export default function EmployeeForm() {
                 label="Employment Type"
                 value={form.employmentType}
                 onChange={(e) => setField("employmentType", e.target.value)}
+                data-field="employmentType"
+                required={req("employmentType")}
+                error={fieldErrors.employmentType}
               >
                 <option value="">—</option>
                 <option value="full_time">Full Time</option>
@@ -2064,6 +2402,9 @@ export default function EmployeeForm() {
                 label="Shift"
                 value={form.workShiftMode}
                 onChange={(e) => setField("workShiftMode", e.target.value)}
+                data-field="workShiftMode"
+                required={req("workShiftMode")}
+                error={fieldErrors.workShiftMode}
               >
                 <option value="">Select a shift…</option>
                 <option value="core">Core — office hours from settings</option>
@@ -2079,12 +2420,18 @@ export default function EmployeeForm() {
                     type="time"
                     value={form.workShiftStart}
                     onChange={(e) => setField("workShiftStart", e.target.value)}
+                    data-field="workShiftStart"
+                    required={req("workShiftStart")}
+                    error={fieldErrors.workShiftStart}
                   />
                   <TI
                     label="Shift Ends"
                     type="time"
                     value={form.workShiftEnd}
                     onChange={(e) => setField("workShiftEnd", e.target.value)}
+                    data-field="workShiftEnd"
+                    required={req("workShiftEnd")}
+                    error={fieldErrors.workShiftEnd}
                   />
                   {/* Asked per person, and only here, because it is the one
                       thing about a custom shift that does not follow from the
@@ -2194,6 +2541,7 @@ export default function EmployeeForm() {
           onSave={isAddMode ? null : saveSection}
           onCancel={cancelEdit}
           saving={savingSec === "salary"}
+          missing={missingIn("salary")}
         >
           {ed("salary") ? (
             <>
@@ -2254,10 +2602,13 @@ export default function EmployeeForm() {
                   </SI>
                   {form.internStipendType === "paid" && (
                     <TI
-                      label="Monthly Stipend (₹) *"
+                      label="Monthly Stipend (₹)"
                       type="number"
                       value={form.stipend}
                       onChange={(e) => setField("stipend", e.target.value)}
+                      data-field="stipend"
+                      required={req("stipend")}
+                      error={fieldErrors.stipend}
                       hint={
                         <FHint
                           formula="Stipend ÷ days in month × payable days"
@@ -2297,12 +2648,15 @@ export default function EmployeeForm() {
                 </p>
                 <div className="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2 deck:grid-cols-4">
                   <TI
-                    label="Gross Salary (₹) *"
+                    label="Gross Salary (₹)"
                     type="number"
                     value={form.grossSalary}
                     onChange={(e) =>
                       onSalaryChange("grossSalary", e.target.value)
                     }
+                    data-field="grossSalary"
+                    required={req("grossSalary")}
+                    error={fieldErrors.grossSalary}
                     hint={
                       <FHint
                         formula="Monthly Gross Salary"
@@ -2850,6 +3204,7 @@ export default function EmployeeForm() {
           onSave={isAddMode ? null : saveSection}
           onCancel={cancelEdit}
           saving={savingSec === "documents"}
+          missing={missingIn("documents")}
         >
           {ed("documents") ? (
             <>
@@ -3081,6 +3436,7 @@ export default function EmployeeForm() {
           onSave={isAddMode ? null : saveSection}
           onCancel={cancelEdit}
           saving={savingSec === "address"}
+          missing={missingIn("address")}
         >
           {ed("address") ? (
             <>
@@ -3217,6 +3573,12 @@ export default function EmployeeForm() {
             </>
           )}
         </Sec>
+
+        {isAddMode && flagged.length > 0 && (
+          <div className="pt-4">
+            <MissingSummary fields={flagged} />
+          </div>
+        )}
 
         {isAddMode && (
           <div className="flex items-center justify-end gap-3 py-8">

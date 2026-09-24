@@ -273,6 +273,32 @@ async function approveSubmission({ actor, submissionId, note = "" }) {
 
   /* ── The customer ──────────────────────────────────────────────── */
 
+  // A REFUSAL DOES NOT SURVIVE THE ACCEPTANCE THAT REPLACES IT.
+  //
+  // Rejecting a registration marks the customer `rejected`, which is what stops
+  // anybody being sent back out to them. Nothing used to lift it: the employee
+  // reworked the form, the desk approved it, the step advanced — and the
+  // customer stayed marked as refused for good, so every later assignment was
+  // answered with "their registration was rejected" and the pipeline dead-ended
+  // one step after the rework it had just accepted.
+  //
+  // Lifted here rather than in one branch below, so it holds however the
+  // submission is applied. `open` and not `in_progress`: the branches below
+  // promote it themselves, and this keeps that decision in one place.
+  if (lead.status === "rejected") {
+    await SalesLead.updateOne({ _id: lead._id }, { $set: { status: "open" } });
+    lead.status = "open";
+    await SalesLead.pushTimeline(lead._id, {
+      at: when,
+      kind: "approved",
+      message: "Earlier refusal lifted — a later submission was accepted",
+      byKind: actor?.kind || "desk",
+      by: actor?.id || null,
+      byName: actor?.name || "",
+      meta: { submissionId: submission._id },
+    });
+  }
+
   let advancedTo = lead.stageKey;
   let completed = false;
 

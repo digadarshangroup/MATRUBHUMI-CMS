@@ -200,7 +200,37 @@ router.get("/stages", deskRead, async (req, res) => {
     const rows = await SalesStage.find({ pipelineKey: req.query.pipeline || "default" })
       .sort({ order: 1 })
       .lean();
-    res.json({ success: true, data: rows });
+
+    // A step with no form cannot be assigned — createAssignment refuses it with
+    // "No form is configured for X". Said HERE, on the configuration screen, so
+    // the gap is visible while it is being set up rather than weeks later to
+    // whoever first tries to send somebody out. A fresh installation seeds eight
+    // steps and two forms, so six of them start out in this state.
+    const data = rows.map((s) => ({
+      ...s,
+      // Terminal steps end a workflow; nobody fills a form to arrive at one.
+      needsForm: !s.templateId && !s.isTerminal,
+    }));
+    const missing = data.filter((s) => s.needsForm);
+
+    res.json({
+      success: true,
+      data,
+      ...(missing.length
+        ? {
+            warning: {
+              code: "STEPS_WITHOUT_FORMS",
+              message:
+                missing.length === 1
+                  ? `"${missing[0].name}" has no form, so no work can be assigned for it.`
+                  : `${missing.length} steps have no form, so no work can be assigned for them: ${missing
+                      .map((s) => s.name)
+                      .join(", ")}.`,
+              stageKeys: missing.map((s) => s.key),
+            },
+          }
+        : {}),
+    });
   } catch (err) {
     sendError(res, err, "sales-templates");
   }
