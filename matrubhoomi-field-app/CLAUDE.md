@@ -143,8 +143,15 @@ repo — the paper ground, the field green, the neutral ink. Duplicated rather t
 fetched because a phone must render correctly with no network. If the web palette
 is retuned, retune this to match; they are meant to read as one system.
 
-Type is one step larger than Material's defaults throughout, deliberately. This
-is read at arm's length in sunlight by somebody standing in a field.
+Type is Material's own scale, a little smaller and lighter: Medium for titles
+and labels, Regular for body, nothing Bold except the numbers inside map
+markers. It used to be a step larger and SemiBold throughout, which staff found
+shouty and which filled small phones. Size is the READER's choice, not ours:
+the phone's own font setting is followed up to 1.3x (`ui/components/Fit.kt`,
+`CappedFontScale`), and Settings → Text size adds Smaller / Standard / Larger on
+top (`Prefs.textScale`). Anything that must stay on one line (tabs, chips,
+buttons, the bottom bar) uses `FitText`, so a large setting shrinks that one
+label instead of wrapping it.
 
 Dynamic colour (Material You) is off on purpose — this is a company tool used
 alongside a company web app.

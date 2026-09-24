@@ -158,6 +158,11 @@ class Prefs(context: Context) {
         get() = sp.getLong(KEY_BATTERY_ACK, 0L)
         set(value) = sp.edit().putLong(KEY_BATTERY_ACK, value).apply()
 
+    /** The app's own text size on top of the phone's — see ui/components/Fit.kt. */
+    var textScale: Float
+        get() = sp.getFloat(KEY_TEXT_SCALE, 1f)
+        set(value) = sp.edit().putFloat(KEY_TEXT_SCALE, value).apply()
+
     /** The last update check: when, and the release it found (JSON, or ""). */
     var updateCheckedAt: Long
         get() = sp.getLong(KEY_UPDATE_AT, 0L)
@@ -283,6 +288,7 @@ class Prefs(context: Context) {
         private const val KEY_MUST_CHANGE_PW = "must_change_password"
         private const val KEY_UPDATE_AT = "update_checked_at"
         private const val KEY_BATTERY_ACK = "battery_ack_at"
+        private const val KEY_TEXT_SCALE = "text_scale"
         private const val KEY_UPDATE_JSON = "update_json"
         /** Changed off-screen and shown on screen — see watch(). */
         private val SHOWN_KEYS = setOf(KEY_ON_DUTY, KEY_DUTY_AT, KEY_ATTENDANCE_NOTE)

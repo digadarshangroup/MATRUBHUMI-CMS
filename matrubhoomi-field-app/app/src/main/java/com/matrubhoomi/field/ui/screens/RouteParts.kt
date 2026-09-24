@@ -155,7 +155,7 @@ fun NowPanel(day: MyDay?, onDuty: Boolean) {
                     modifier = Modifier.size(22.dp),
                 )
                 Spacer(Modifier.width(8.dp))
-                Text(words.headline, style = MaterialTheme.typography.titleLarge, color = ink, fontWeight = FontWeight.SemiBold)
+                Text(words.headline, style = MaterialTheme.typography.titleLarge, color = ink, fontWeight = FontWeight.Medium)
             }
             if (words.detail.isNotBlank()) {
                 Spacer(Modifier.height(2.dp))
@@ -232,7 +232,7 @@ private fun StayRow(stop: DayStop, number: Int, last: Boolean) {
                 else "${clockOf(stop.arrivedAt)} – ${clockOf(stop.leftAt)} · ${formatMinutes(stop.minutes)}",
                 style = MaterialTheme.typography.bodySmall,
                 color = if (stop.ongoing) tone else MaterialTheme.colorScheme.onSurfaceVariant,
-                fontWeight = if (stop.ongoing) FontWeight.SemiBold else FontWeight.Normal,
+                fontWeight = if (stop.ongoing) FontWeight.Medium else FontWeight.Normal,
             )
             stop.visits.forEach { v ->
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {

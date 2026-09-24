@@ -136,7 +136,7 @@ private fun StandingRow(s: Standing, isMe: Boolean) {
                 "${s.rank}",
                 style = MaterialTheme.typography.titleMedium,
                 color = medal ?: MaterialTheme.colorScheme.onSurfaceVariant,
-                fontWeight = if (medal != null) FontWeight.Bold else FontWeight.Normal,
+                fontWeight = if (medal != null) FontWeight.Medium else FontWeight.Normal,
                 modifier = Modifier.widthIn(min = 30.dp),
             )
             Avatar(s.name, size = 36.dp)
@@ -145,7 +145,7 @@ private fun StandingRow(s: Standing, isMe: Boolean) {
                 Text(
                     if (isMe) "${s.name} (you)" else s.name,
                     style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = if (isMe) FontWeight.SemiBold else FontWeight.Normal,
+                    fontWeight = if (isMe) FontWeight.Medium else FontWeight.Normal,
                     maxLines = 1,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 )

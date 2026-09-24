@@ -245,7 +245,7 @@ fun WeekBars(
                     day.letter,
                     style = MaterialTheme.typography.labelSmall,
                     color = if (day.isToday) colour else MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = if (day.isToday) FontWeight.Bold else FontWeight.Normal,
+                    fontWeight = if (day.isToday) FontWeight.Medium else FontWeight.Normal,
                 )
             }
         }
@@ -290,7 +290,7 @@ fun Avatar(
             initialsOf(name),
             style = MaterialTheme.typography.titleSmall,
             color = tone,
-            fontWeight = FontWeight.SemiBold,
+            fontWeight = FontWeight.Medium,
         )
     }
 }
@@ -597,7 +597,7 @@ fun SegmentedTabs(
                         style = MaterialTheme.typography.labelLarge,
                         color = ink,
                         textAlign = TextAlign.Center,
-                        fontWeight = if (chosen) FontWeight.SemiBold else FontWeight.Normal,
+                        fontWeight = if (chosen) FontWeight.Medium else FontWeight.Normal,
                     )
                 }
             }
@@ -670,7 +670,7 @@ fun LivePill(
             style = MaterialTheme.typography.labelSmall,
             color = tone,
             letterSpacing = 0.08.em,
-            fontWeight = FontWeight.SemiBold,
+            fontWeight = FontWeight.Medium,
         )
     }
 }

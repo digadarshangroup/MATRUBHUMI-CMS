@@ -118,7 +118,10 @@ fun DocumentsScreen() {
 
             val list = docs.data.orEmpty()
             val ready = list.filter { it.isAvailable }
-            val asked = list.filterNot { it.isAvailable }
+            // A letter HR took back is not a request of theirs — it gets its own
+            // heading, so the "Document withdrawn" notification lands on it.
+            val withdrawn = list.filter { !it.isAvailable && it.status == "withdrawn" }
+            val asked = list.filter { !it.isAvailable && it.status != "withdrawn" }
 
             when {
                 docs.loading && docs.data == null -> item { LoadingBlock() }
@@ -153,6 +156,24 @@ fun DocumentsScreen() {
                                     } else {
                                         Icon(Icons.AutoMirrored.Outlined.OpenInNew, contentDescription = "Open", tint = MaterialTheme.colorScheme.primary)
                                     }
+                                }
+                            }
+                        }
+                    }
+                    if (withdrawn.isNotEmpty()) {
+                        item { SectionLabel("Withdrawn by HR", Modifier.padding(top = 6.dp)) }
+                        items(withdrawn, key = { it.id }) { d ->
+                            Card {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(d.displayName, style = MaterialTheme.typography.titleMedium)
+                                        Text(
+                                            "HR took this back, so it can no longer be opened. Ask HR if you still need it.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                    StatusChip(d.status)
                                 }
                             }
                         }

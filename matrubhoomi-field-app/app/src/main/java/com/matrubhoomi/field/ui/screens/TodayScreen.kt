@@ -354,7 +354,7 @@ fun TodayScreen(
                                 // what a ring shows.
                                 ProgressRing(fraction = if (assigned > 0) done.toFloat() / assigned else 0f, size = 76.dp) {
                                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                        Text("$done", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                                        Text("$done", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Medium)
                                         Text("of $assigned", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
                                 }

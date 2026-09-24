@@ -52,7 +52,7 @@ fun UpdateCard(release: AppRelease, modifier: Modifier = Modifier) {
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text("Update available", style = MaterialTheme.typography.titleMedium, color = brand, fontWeight = FontWeight.SemiBold)
+                Text("Update available", style = MaterialTheme.typography.titleMedium, color = brand, fontWeight = FontWeight.Medium)
                 Text(
                     "Version ${release.version} is out — you have ${BuildConfig.VERSION_NAME}.",
                     style = MaterialTheme.typography.bodySmall,

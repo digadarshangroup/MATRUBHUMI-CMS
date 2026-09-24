@@ -322,7 +322,7 @@ fun BigButton(
     androidx.compose.material3.Button(
         onClick = onClick,
         enabled = enabled,
-        modifier = modifier.fillMaxWidth().height(52.dp),
+        modifier = modifier.fillMaxWidth().height(48.dp),
         shape = RoundedCornerShape(14.dp),
     ) {
         if (icon != null) {
@@ -345,7 +345,7 @@ fun BigOutlinedButton(
     androidx.compose.material3.OutlinedButton(
         onClick = onClick,
         enabled = enabled,
-        modifier = modifier.height(52.dp),
+        modifier = modifier.height(46.dp),
         shape = RoundedCornerShape(14.dp),
         // Narrower than Material's 24dp: three of these share a row on a 5"
         // handset, and "Tomorrow" was breaking into "Tomorro / w".

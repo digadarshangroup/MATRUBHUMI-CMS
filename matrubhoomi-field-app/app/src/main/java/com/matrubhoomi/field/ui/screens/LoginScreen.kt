@@ -136,7 +136,7 @@ fun LoginScreen(vm: AppViewModel, onSignedIn: () -> Unit) {
                     }
                 }
                 Spacer(Modifier.height(18.dp))
-                Text("Matrubhoomi", style = MaterialTheme.typography.headlineMedium, color = Color.White, fontWeight = FontWeight.SemiBold)
+                Text("Matrubhoomi", style = MaterialTheme.typography.headlineMedium, color = Color.White, fontWeight = FontWeight.Medium)
                 Text("Employee app", style = MaterialTheme.typography.titleMedium, color = Color.White.copy(alpha = 0.85f))
             }
         }
@@ -152,7 +152,7 @@ fun LoginScreen(vm: AppViewModel, onSignedIn: () -> Unit) {
                 .fillMaxWidth(),
         ) {
             Column(Modifier.padding(20.dp)) {
-                Text("Sign in", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Text("Sign in", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Medium)
                 Text(
                     "With the same phone number and password as the employee portal.",
                     style = MaterialTheme.typography.bodyMedium,

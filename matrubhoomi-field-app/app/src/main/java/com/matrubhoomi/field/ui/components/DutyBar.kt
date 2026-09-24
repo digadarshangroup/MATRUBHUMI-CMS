@@ -108,7 +108,7 @@ fun DutyBar(
                 Text(
                     if (stale) "Not reporting" else "On duty",
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
+                    fontWeight = FontWeight.Medium,
                     color = if (stale) MaterialTheme.colorScheme.error
                     else MaterialTheme.colorScheme.onPrimaryContainer,
                 )

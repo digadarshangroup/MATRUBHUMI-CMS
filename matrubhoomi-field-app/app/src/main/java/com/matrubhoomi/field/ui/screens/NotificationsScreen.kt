@@ -173,7 +173,7 @@ private fun InboxRow(n: InboxItem, unread: Boolean, onClick: () -> Unit) {
                     Text(
                         n.title,
                         style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal,
+                        fontWeight = if (unread) FontWeight.Medium else FontWeight.Normal,
                         modifier = Modifier.weight(1f),
                     )
                     if (unread) {

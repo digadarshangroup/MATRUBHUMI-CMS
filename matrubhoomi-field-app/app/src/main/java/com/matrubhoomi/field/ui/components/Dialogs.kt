@@ -153,7 +153,7 @@ fun AppDialog(
                     Text(
                         title,
                         style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.SemiBold,
+                        fontWeight = FontWeight.Medium,
                         textAlign = TextAlign.Center,
                     )
                     if (!message.isNullOrBlank()) {
@@ -178,7 +178,7 @@ fun AppDialog(
                 Button(
                     onClick = onConfirm,
                     enabled = confirmEnabled && !busy,
-                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
                     shape = RoundedCornerShape(14.dp),
                     colors = if (tone == Tone.Danger) {
                         ButtonDefaults.buttonColors(

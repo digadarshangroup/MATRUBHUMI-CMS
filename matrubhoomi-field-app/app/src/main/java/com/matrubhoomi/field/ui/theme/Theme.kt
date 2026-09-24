@@ -174,15 +174,24 @@ private val DarkColours = darkColorScheme(
  * situation, and a form nobody can read is a form filled in wrong.
  */
 private val FieldTypography = Typography(
-    headlineSmall = TextStyle(fontSize = 24.sp, lineHeight = 30.sp, fontWeight = FontWeight.SemiBold),
-    titleLarge = TextStyle(fontSize = 21.sp, lineHeight = 27.sp, fontWeight = FontWeight.SemiBold),
-    titleMedium = TextStyle(fontSize = 17.sp, lineHeight = 23.sp, fontWeight = FontWeight.Medium),
-    bodyLarge = TextStyle(fontSize = 17.sp, lineHeight = 25.sp),
-    bodyMedium = TextStyle(fontSize = 15.sp, lineHeight = 22.sp),
-    bodySmall = TextStyle(fontSize = 13.5.sp, lineHeight = 19.sp),
-    labelLarge = TextStyle(fontSize = 15.sp, fontWeight = FontWeight.Medium),
-    labelMedium = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.Medium),
+    // Android's own sizes, a touch smaller for the denser screens, and medium
+    // weight at most. The first version set everything a step LARGER than
+    // Android's, in semibold: with a phone's font turned up as well, whole
+    // screens became headings. The owner's text-size setting (and the app's
+    // own Smaller / Standard / Larger) now does the enlarging — see Fit.kt.
+    headlineMedium = TextStyle(fontSize = 24.sp, lineHeight = 30.sp, fontWeight = FontWeight.Medium),
+    headlineSmall = TextStyle(fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.Medium),
+    titleLarge = TextStyle(fontSize = 18.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium),
+    titleMedium = TextStyle(fontSize = 15.sp, lineHeight = 21.sp, fontWeight = FontWeight.Medium),
+    titleSmall = TextStyle(fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.Medium),
+    bodyLarge = TextStyle(fontSize = 15.sp, lineHeight = 22.sp),
+    bodyMedium = TextStyle(fontSize = 14.sp, lineHeight = 20.sp),
+    bodySmall = TextStyle(fontSize = 12.5.sp, lineHeight = 17.sp),
+    labelLarge = TextStyle(fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.Medium),
+    labelMedium = TextStyle(fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium),
+    labelSmall = TextStyle(fontSize = 11.sp, lineHeight = 15.sp, fontWeight = FontWeight.Medium),
 )
+
 
 /**
  * LIGHT BY DEFAULT, REGARDLESS OF THE PHONE'S SETTING.
@@ -198,13 +207,13 @@ private val FieldTypography = Typography(
  * is simply not chosen for them by the operating system.
  */
 @Composable
-fun FieldTheme(darkTheme: Boolean = false, content: @Composable () -> Unit) {
+fun FieldTheme(darkTheme: Boolean = false, textScale: Float = 1f, content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = if (darkTheme) DarkColours else LightColours,
         typography = FieldTypography,
     ) {
         // See ui/components/Fit.kt: this type is already a step larger than
         // Android's, so the system scale is followed only up to a point.
-        com.matrubhoomi.field.ui.components.CappedFontScale(content)
+        com.matrubhoomi.field.ui.components.CappedFontScale(textScale, content)
     }
 }

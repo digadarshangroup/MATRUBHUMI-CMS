@@ -108,6 +108,31 @@ fun MoreScreen(vm: AppViewModel, onSignedOut: () -> Unit) {
                 }
             }
 
+            /* ── Text size ─────────────────────────────────────── */
+            item {
+                Card {
+                    Text("Text size", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "On top of your phone's own text size setting.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    val sizes = com.matrubhoomi.field.ui.components.TextSize.entries
+                    val current = com.matrubhoomi.field.ui.components.TextSize.of(state.textScale)
+                    com.matrubhoomi.field.ui.components.SegmentedTabs(
+                        options = sizes.map { it.label },
+                        selectedIndex = sizes.indexOf(current),
+                        onSelect = { vm.setTextScale(sizes[it].factor) },
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "Your casual leave on Fri 2 Oct is approved.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+
             /* ── Updates ───────────────────────────────────────── */
             item {
                 val release = state.update

@@ -78,6 +78,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val mustChangePassword: Boolean = false,
         /** A newer build HR has published, when there is one. */
         val update: com.matrubhoomi.field.data.AppRelease? = null,
+        /** The app's own text size (Settings), on top of the phone's. */
+        val textScale: Float = 1f,
     ) {
         val profile: Profile get() = bootstrap?.profile ?: Profile.EMPTY
         /** Before the first bootstrap, a signed-in person gets nothing role-dependent. */
@@ -93,6 +95,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             attendanceNote = prefs.attendanceNote,
             mustChangePassword = prefs.isSignedIn && prefs.mustChangePassword,
             update = cachedUpdate(prefs),
+            textScale = prefs.textScale,
         ),
     )
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -203,6 +206,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** The password typed at sign-in, while the set-your-own screen needs it. Never stored. */
     var justTypedPassword: String? = null
         private set
+
+    fun setTextScale(factor: Float) {
+        prefs.textScale = factor
+        _state.value = _state.value.copy(textScale = factor)
+    }
 
     /** The server accepted a password of their own. */
     fun passwordChosen() {

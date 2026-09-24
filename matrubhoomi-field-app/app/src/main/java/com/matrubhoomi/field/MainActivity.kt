@@ -128,9 +128,9 @@ class MainActivity : FragmentActivity() {
         pendingOpen = intent?.getStringExtra(Notifier.EXTRA_OPEN)
 
         setContent {
-            FieldTheme {
-                val vm: AppViewModel = viewModel()
-                val state by vm.state.collectAsState()
+            val vm: AppViewModel = viewModel()
+            val state by vm.state.collectAsState()
+            FieldTheme(textScale = state.textScale) {
                 val nav = rememberNavController()
 
                 val permissionLauncher = rememberLauncherForActivityResult(

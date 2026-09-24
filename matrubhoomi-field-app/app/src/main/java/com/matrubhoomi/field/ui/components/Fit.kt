@@ -22,7 +22,7 @@ import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.sp
 
 /**
- * Fitting the screen of whoever is holding the phone.
+ * Fitting the screen, and the eyes, of whoever is holding the phone.
  *
  * Phones differ twice over: in how wide they are, and in the text size their
  * owner has chosen. On a real handset with a large font the bottom bar broke
@@ -31,27 +31,41 @@ import androidx.compose.ui.unit.sp
  *
  *  - a word that MUST stay whole — a tab, a segment, a button, a figure in a
  *    narrow tile — is set on one line and shrinks until it fits ([FitText]);
- *  - the owner's font setting is honoured, but only up to [MAX_FONT_SCALE].
- *    This app's type is already a step larger than Android's defaults (read in
- *    sunlight at arm's length), so an unbounded system scale on top of it made
- *    the largest settings unusable rather than readable ([CappedFontScale]).
+ *  - the owner's font setting is followed — up to [MAX_FONT_SCALE], where
+ *    layouts start to break — and Settings adds the app's own Smaller /
+ *    Standard / Larger on top ([CappedFontScale], [TextSize]).
  */
 
 /** The largest system font scale the app follows. Beyond it, layouts break. */
-const val MAX_FONT_SCALE = 1.15f
+const val MAX_FONT_SCALE = 1.3f
 
-/** Apply [MAX_FONT_SCALE] to everything inside. Used once, at the root. */
-@Composable
-fun CappedFontScale(content: @Composable () -> Unit) {
-    val density = LocalDensity.current
-    if (density.fontScale <= MAX_FONT_SCALE) {
-        content()
-        return
+/** The app's own text size choice (Settings), on top of the phone's. */
+enum class TextSize(val label: String, val factor: Float) {
+    Smaller("Smaller", 0.9f),
+    Standard("Standard", 1f),
+    Larger("Larger", 1.12f),
+    ;
+    companion object {
+        fun of(factor: Float): TextSize = entries.minBy { kotlin.math.abs(it.factor - factor) }
     }
-    CompositionLocalProvider(
-        LocalDensity provides Density(density = density.density, fontScale = MAX_FONT_SCALE),
-        content = content,
-    )
+}
+
+/**
+ * Everything inside at the phone's own text size (up to [MAX_FONT_SCALE]),
+ * times the app's own [textScale]. Used once, at the root.
+ */
+@Composable
+fun CappedFontScale(textScale: Float = 1f, content: @Composable () -> Unit) {
+    val density = LocalDensity.current
+    val scale = (density.fontScale.coerceAtMost(MAX_FONT_SCALE) * textScale).coerceIn(0.8f, MAX_FONT_SCALE * 1.12f)
+    // Always the provider, even when the scale is the phone's own: switching
+    // between "provide" and "don't" changes the shape of the tree, which
+    // throws away everything remembered below it — choosing a text size in
+    // Settings used to drop the person back on Today.
+    val scaled = remember(density.density, scale) {
+        Density(density = density.density, fontScale = scale)
+    }
+    CompositionLocalProvider(LocalDensity provides scaled, content = content)
 }
 
 /**

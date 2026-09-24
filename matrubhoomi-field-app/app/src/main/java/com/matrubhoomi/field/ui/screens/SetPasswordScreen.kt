@@ -104,7 +104,7 @@ fun SetPasswordScreen(vm: AppViewModel) {
             Image(painterResource(R.drawable.logo_mark), contentDescription = null, modifier = Modifier.size(44.dp))
         }
         Spacer(Modifier.height(20.dp))
-        Text("Choose your own password", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+        Text("Choose your own password", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Medium)
         Spacer(Modifier.height(8.dp))
         Text(
             "You signed in with the password HR gave you — your phone number. Anyone who knows your number could sign in as you, " +
