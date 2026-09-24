@@ -33,8 +33,9 @@ const FIELD_LABELS = {
   email: "Email",
   phone: "Phone",
   grossPay: "Gross salary",
-  primaryManager: "Primary manager",
-  secondaryManager: "Secondary manager",
+  primaryManager: "Reporting manager",
+  // Kept so older entries still read; nothing sets it any more.
+  secondaryManager: "Secondary manager (retired)",
   name: "Name",
   biometricId: "Biometric ID",
 };

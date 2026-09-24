@@ -29,6 +29,8 @@ import {
   ShieldAlert,
   FileSignature,
   Inbox,
+  Megaphone,
+  Smartphone,
 } from "lucide-react";
 import FrostShell from "@/components/shell/FrostShell";
 import { useDeptRole } from "@/components/access/useDeptRole";
@@ -95,6 +97,8 @@ const NAV = [
     ],
   },
   { key: "performance", name: "Performance", href: "/hr/dashboard/performance", icon: TrendingUp },
+  { key: "announcements", name: "Announcements", href: "/hr/dashboard/announcements", icon: Megaphone, badge: "NEW" },
+  { key: "mobile-app", name: "Mobile app", href: "/hr/dashboard/mobile-app", icon: Smartphone, badge: "NEW" },
 
   { section: "System" },
   {

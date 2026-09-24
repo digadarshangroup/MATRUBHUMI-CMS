@@ -14,17 +14,16 @@
 // one <svg> on top. No dependency, nothing to hydrate, identical on the server
 // and the client.
 //
-// THE TILE PROVIDERS, AND WHY THESE TWO
-// -------------------------------------
-// This started on OpenStreetMap's own tile server. That server runs on donated
-// capacity for the project's own use, has no CDN in front of it for most of the
-// world, rate-limits, and looks it. It is a courtesy, not a service.
-//
-//   STREETS   Carto Voyager — the same OSM data, rendered by Carto, served from
-//             a real CDN, at @2x.
-//   SATELLITE Esri World Imagery — keyless, global, and in India sharper than
-//             anything else available without a contract. A desk recognises a
-//             farm from the air long before it recognises a street name.
+// THE TILE PROVIDERS, AND WHY THESE
+// ---------------------------------
+//   STREETS   OpenStreetMap's standard tiles, the same as the field app. This
+//             was Carto Voyager until Carto began answering keyless requests
+//             with blurred tiles stamped "API KEY REQUIRED". OSM's server is a
+//             shared resource meant for light use, which a sales desk is.
+//   SATELLITE Esri World Imagery with Esri's own place-name sheet over it —
+//             keyless, global, and in India sharper than anything else
+//             available without a contract. A desk recognises a farm from the
+//             air long before it recognises a street name.
 //
 // Both REQUIRE their attribution, drawn in the corner for whichever is showing.
 // NEXT_PUBLIC_MAP_TILE_URL still overrides the street layer for a private
@@ -40,9 +39,9 @@ const LAYERS = {
     label: "Map",
     url:
       process.env.NEXT_PUBLIC_MAP_TILE_URL ??
-      "https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png",
-    maxZoom: 20,
-    attribution: "© OpenStreetMap © CARTO",
+      "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    maxZoom: 19,
+    attribution: "© OpenStreetMap contributors",
   },
   satellite: {
     label: "Satellite",
@@ -58,17 +57,16 @@ const LAYERS = {
     // without recognising the rooftops.
     //
     // Every satellite map anybody has used is really two layers, and this is
-    // the second: a transparent sheet of labels over the top. Carto's is used
-    // because it is the same cartography as the Map layer, it is retina, and it
-    // reaches zoom 20 — so the names never run out before the imagery does.
+    // the second: a transparent sheet of labels over the top — Esri's own,
+    // drawn for this imagery and keyless like it.
     overlays: [
       {
-        url: "https://basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}@2x.png",
-        maxZoom: 20,
+        url: "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
+        maxZoom: 19,
       },
     ],
     maxZoom: 19,
-    attribution: "Esri, Maxar · labels © OpenStreetMap © CARTO",
+    attribution: "Esri, Maxar, Earthstar Geographics",
   },
 };
 
@@ -92,10 +90,28 @@ function metresPerPixel(lat, z) {
   return (156543.03392 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, z);
 }
 
+/**
+ * @param path     the route, in order
+ * @param stays    the day's stops, numbered in order — `{ lat, lng, n, title }` —
+ *                 matching the numbered list beside the map
+ * @param visits   recorded visits — `{ lat, lng, title }` — small, so a stop with
+ *                 three visits in it still reads as one stop
+ * @param current  where the phone is now — `{ lat, lng, title }` — the one pin
+ *                 drawn to be found at a glance
+ * @param people   the whole team — `{ id, lat, lng, label, tone, title }` — each
+ *                 clickable through `onPick(id)`
+ * @param stops    older plain stop dots, and `markers` plain pins; kept for any
+ *                 caller that still passes them
+ */
 export default function TrackMap({
   path = [],
   stops = [],
   markers = [],
+  stays = [],
+  visits = [],
+  current = null,
+  people = [],
+  onPick,
   height = 380,
   emptyMessage = "Nothing was recorded for this day.",
 }) {
@@ -129,8 +145,10 @@ export default function TrackMap({
   );
 
   const allPoints = useMemo(
-    () => [...points, ...stops, ...markers].filter((p) => Number.isFinite(p?.lat) && Number.isFinite(p?.lng)),
-    [points, stops, markers],
+    () =>
+      [...points, ...stops, ...markers, ...stays, ...visits, ...(current ? [current] : []), ...people]
+        .filter((p) => Number.isFinite(p?.lat) && Number.isFinite(p?.lng)),
+    [points, stops, markers, stays, visits, current, people],
   );
 
   // A new subject is a new map. Without this, opening a second employee's day
@@ -261,7 +279,9 @@ export default function TrackMap({
     // pointer event — including the pointerup — to the container. The button
     // never saw the release, so no click was ever synthesised. The buttons were
     // fine; the map was quietly stealing their events.
-    if (e.target.closest("button")) return;
+    // The same for a person's pin on the team map: it is a control too, and a
+    // captured pointer would swallow its click the same way.
+    if (e.target.closest("button, [data-pick]")) return;
 
     e.currentTarget.setPointerCapture(e.pointerId);
     dragRef.current = { x: e.clientX, y: e.clientY, centre: frame.centre, zoom: frame.z };
@@ -389,28 +409,7 @@ export default function TrackMap({
             </>
           )}
 
-          {stops.map((stop, i) => {
-            const { x, y } = frame.project(stop);
-            return (
-              <g key={`stop-${i}`}>
-                <circle cx={x} cy={y} r="7" fill="#ffffff" fillOpacity="0.92" />
-                <circle cx={x} cy={y} r="4.5" fill="var(--g-water)" />
-                {stop.minutes >= 5 && <title>{`${stop.label || "Stopped"} — ${stop.minutes} min`}</title>}
-              </g>
-            );
-          })}
-
-          {markers.map((m, i) => {
-            const { x, y } = frame.project(m);
-            return (
-              <g key={`marker-${i}`}>
-                <circle cx={x} cy={y} r="9" fill="var(--g-brand)" fillOpacity="0.18" />
-                <circle cx={x} cy={y} r="5" fill="var(--g-brand)" stroke="#ffffff" strokeWidth="2" />
-                <title>{m.label || "Here"}</title>
-              </g>
-            );
-          })}
-
+          {/* Start and end of the line first, so every pin sits on top of them. */}
           {points.length > 1 && (
             <>
               <circle
@@ -431,6 +430,109 @@ export default function TrackMap({
               />
             </>
           )}
+
+          {/* Pins that carry a tooltip take pointer events back from the
+              overlay — an SVG <title> only shows for something that can be
+              hovered, which is why the stop tooltips never appeared. */}
+          {stops.map((stop, i) => {
+            const { x, y } = frame.project(stop);
+            return (
+              <g key={`stop-${i}`} style={{ pointerEvents: "auto" }}>
+                <circle cx={x} cy={y} r="7" fill="#ffffff" fillOpacity="0.92" />
+                <circle cx={x} cy={y} r="4.5" fill="var(--g-water)" />
+                <title>{`${stop.label || "Stopped"}${stop.minutes ? ` — ${stop.minutes} min` : ""}`}</title>
+              </g>
+            );
+          })}
+
+          {visits.map((v, i) => {
+            const { x, y } = frame.project(v);
+            return (
+              <g key={`visit-${i}`} style={{ pointerEvents: "auto" }}>
+                <circle cx={x} cy={y} r="6.5" fill="#ffffff" fillOpacity="0.95" />
+                <circle cx={x} cy={y} r="4.5" fill="var(--g-harvest)" />
+                <title>{v.title || "Visit recorded"}</title>
+              </g>
+            );
+          })}
+
+          {stays.map((st, i) => {
+            const { x, y } = frame.project(st);
+            return (
+              <g key={`stay-${i}`} style={{ pointerEvents: "auto" }}>
+                <circle cx={x} cy={y + 1} r="12.5" fill="#000000" fillOpacity="0.16" />
+                <circle cx={x} cy={y} r="12" fill="#ffffff" />
+                <circle cx={x} cy={y} r="10" fill={st.ongoing ? "var(--g-water)" : "var(--g-brand)"} />
+                <text
+                  x={x}
+                  y={y}
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  fontSize="10"
+                  fontWeight="700"
+                  fill="#ffffff"
+                >
+                  {st.n}
+                </text>
+                <title>{st.title || `Stop ${st.n}`}</title>
+              </g>
+            );
+          })}
+
+          {people.map((p) => {
+            const { x, y } = frame.project(p);
+            const tone = p.tone || "var(--g-brand)";
+            return (
+              <g
+                key={`person-${p.id}`}
+                data-pick
+                style={{ pointerEvents: "auto", cursor: onPick ? "pointer" : "default" }}
+                onClick={() => onPick?.(p.id)}
+              >
+                <circle cx={x} cy={y} r="15" fill={tone} fillOpacity="0.18" />
+                <circle cx={x} cy={y} r="11" fill={tone} stroke="#ffffff" strokeWidth="2" />
+                <text
+                  x={x}
+                  y={y}
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  fontSize="8.5"
+                  fontWeight="700"
+                  fill="#ffffff"
+                >
+                  {p.label}
+                </text>
+                <title>{p.title || p.label}</title>
+              </g>
+            );
+          })}
+
+          {current && (() => {
+            const { x, y } = frame.project(current);
+            return (
+              <g style={{ pointerEvents: "auto" }}>
+                <circle cx={x} cy={y} r="9" fill="var(--g-water)" fillOpacity="0.3">
+                  <animate attributeName="r" values="9;20;9" dur="2.4s" repeatCount="indefinite" />
+                  <animate attributeName="fill-opacity" values="0.35;0;0.35" dur="2.4s" repeatCount="indefinite" />
+                </circle>
+                <circle cx={x} cy={y} r="8" fill="#ffffff" />
+                <circle cx={x} cy={y} r="5.5" fill="var(--g-water)" />
+                <title>{current.title || "Here now"}</title>
+              </g>
+            );
+          })()}
+
+          {markers.map((m, i) => {
+            const { x, y } = frame.project(m);
+            return (
+              <g key={`marker-${i}`} style={{ pointerEvents: "auto" }}>
+                <circle cx={x} cy={y} r="9" fill="var(--g-brand)" fillOpacity="0.18" />
+                <circle cx={x} cy={y} r="5" fill="var(--g-brand)" stroke="#ffffff" strokeWidth="2" />
+                <title>{m.label || "Here"}</title>
+              </g>
+            );
+          })}
+
         </svg>
       )}
 

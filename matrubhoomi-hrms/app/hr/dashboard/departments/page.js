@@ -36,17 +36,18 @@ import {
 // ── Assign department managers ────────────────────────────────────────────────
 // Pick the person in charge of a department (optionally filtered by their
 // designation). Saving stores them on the department, pushes them onto every
-// existing employee of the department as primary/secondary manager, and new
+// existing employee of the department as their reporting manager, and new
 // employees created under the department inherit them automatically.
+//
+// ONE manager: the reporting manager's approval is final, so there is no
+// second approver to assign here (the backend clears any it finds).
 function AssignManagersModal({ dept, API_URL, onClose, onSaved }) {
   const [emps, setEmps] = useState([]);
   const [loadingEmps, setLoadingEmps] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [primaryDesig, setPrimaryDesig] = useState(dept.primaryManager?.designation || "");
-  const [secondaryDesig, setSecondaryDesig] = useState(dept.secondaryManager?.designation || "");
   const [primaryId, setPrimaryId] = useState(dept.primaryManager?.managerId || "");
-  const [secondaryId, setSecondaryId] = useState(dept.secondaryManager?.managerId || "");
   const [applyToExisting, setApplyToExisting] = useState(true);
 
   useEffect(() => {
@@ -90,7 +91,6 @@ function AssignManagersModal({ dept, API_URL, onClose, onSaved }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           primaryManagerId: primaryId || null,
-          secondaryManagerId: secondaryId || null,
           applyToExisting,
         }),
       });
@@ -181,8 +181,7 @@ function AssignManagersModal({ dept, API_URL, onClose, onSaved }) {
         </div>
 
         <div className="scroll-slim flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4">
-          {renderPicker("Primary manager", primaryDesig, setPrimaryDesig, primaryId, setPrimaryId)}
-          {renderPicker("Secondary manager", secondaryDesig, setSecondaryDesig, secondaryId, setSecondaryId)}
+          {renderPicker("Reporting manager", primaryDesig, setPrimaryDesig, primaryId, setPrimaryId)}
           <label className="flex cursor-pointer items-start gap-2.5 text-sm leading-relaxed text-ink-muted">
             <input
               type="checkbox"
@@ -442,20 +441,10 @@ export default function DepartmentsPage() {
                             </div>
                           </td>
                           <td className="border-b border-hairline px-3 py-2.5">
-                            {dept.primaryManager?.managerName || dept.secondaryManager?.managerName ? (
-                              <>
-                                {dept.primaryManager?.managerName && (
-                                  <div className="text-sm font-medium text-ink">
-                                    {dept.primaryManager.managerName}
-                                  </div>
-                                )}
-                                {dept.secondaryManager?.managerName && (
-                                  <div className="mt-0.5 flex items-center gap-1 text-xs text-ink-muted">
-                                    {dept.secondaryManager.managerName}
-                                    <span className="text-[10px] text-ink-faint">(2nd)</span>
-                                  </div>
-                                )}
-                              </>
+                            {dept.primaryManager?.managerName ? (
+                              <div className="text-sm font-medium text-ink">
+                                {dept.primaryManager.managerName}
+                              </div>
                             ) : (
                               <div className="whitespace-nowrap">
                                 <span data-figure className="text-sm font-medium text-ink">{mgrs}</span>{" "}

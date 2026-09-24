@@ -112,6 +112,11 @@ export default function RouteInWords({ itinerary, loading, error }) {
 
               <span className="min-w-0 flex-1 text-[12.5px] text-[var(--g-ink)]">
                 {leg.place || <span className="text-[var(--g-ink-3)]">Unnamed place</span>}
+                {/* The village, when the name above is a road or a farmer —
+                    "Ramesh Kumar · Kalmeshwar" says where, not only who. */}
+                {leg.locality && leg.place && !leg.place.includes(leg.locality) && (
+                  <span className="text-[var(--g-ink-2)]"> · {leg.locality}</span>
+                )}
                 {leg.district && leg.place && !leg.place.includes(leg.district) && (
                   <span className="text-[var(--g-ink-3)]"> · {leg.district}</span>
                 )}

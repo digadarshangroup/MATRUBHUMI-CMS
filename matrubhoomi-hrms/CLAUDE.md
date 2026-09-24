@@ -103,6 +103,15 @@ illustrated logo should be supplied.
 **PDF generation is spread across `pdf-lib` and `html2canvas`.** Check what a
 neighbouring screen already uses before adding a third library.
 
+## Talking to the workforce
+
+`components/announcements/AnnouncementsPanel.js` is shared by HR
+(`/hr/dashboard/announcements`) and the executive office
+(`/ceo/dashboard/announcements`); only the API base differs. HR's
+`/hr/dashboard/mobile-app` shows who has the employee app (from the app's own
+requests) and publishes releases the app offers as an update. The CEO
+overview's "Today" section is one read of `/api/ceo/overview`.
+
 ## Backend coupling
 
 Adding a department means touching BOTH repos — except it usually does not:

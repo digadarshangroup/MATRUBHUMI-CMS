@@ -14,7 +14,7 @@
 // point at purpose-built summaries, not at duplicates.
 "use client";
 
-import { LayoutDashboard, Users, ClipboardList, ShieldCheck } from "lucide-react";
+import { LayoutDashboard, Users, ClipboardList, ShieldCheck, Megaphone } from "lucide-react";
 import FrostShell from "@/components/shell/FrostShell";
 
 const NAV = [
@@ -23,6 +23,7 @@ const NAV = [
   { section: "People" },
   { key: "hr-employees", name: "Employees", href: "/ceo/dashboard/hr/employees", icon: Users },
   { key: "hr-attendance", name: "Attendance", href: "/ceo/dashboard/hr/attendance", icon: ClipboardList },
+  { key: "announcements", name: "Announcements", href: "/ceo/dashboard/announcements", icon: Megaphone },
 
   { section: "System" },
   // Visible to every executive user; /api/admin/* re-checks isAdmin per request,

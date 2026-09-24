@@ -685,10 +685,6 @@ function BulkEditModal({ API_URL, ids, departments, onClose, onDone }) {
       const m = allEmps.find((e) => e._id === f.primaryManagerId);
       if (m) u.primaryManager = { managerId: m._id, managerName: mgrLabel(m) };
     }
-    if (f.secondaryManagerId) {
-      const m = allEmps.find((e) => e._id === f.secondaryManagerId);
-      if (m) u.secondaryManager = { managerId: m._id, managerName: mgrLabel(m) };
-    }
     if (f.gender) u.gender = f.gender;
     if (f.bloodGroup) u.bloodGroup = f.bloodGroup;
     if (f.maritalStatus) u.maritalStatus = f.maritalStatus;
@@ -812,7 +808,9 @@ function BulkEditModal({ API_URL, ids, departments, onClose, onDone }) {
                 <option value="intern">Intern</option>
               </Select>
             </Field>
-            <Field label="Primary manager">
+            {/* One reporting manager per employee, and their approval is
+                final — there is no second approver to set. */}
+            <Field label="Reporting manager">
               <SearchableSelect
                 options={mgrOptions}
                 value={f.primaryManagerId}
@@ -820,18 +818,7 @@ function BulkEditModal({ API_URL, ids, departments, onClose, onDone }) {
                 placeholder="No change"
                 emptyLabel="No change"
                 loading={loadingEmps}
-                ariaLabel="Primary manager"
-              />
-            </Field>
-            <Field label="Secondary manager">
-              <SearchableSelect
-                options={mgrOptions}
-                value={f.secondaryManagerId}
-                onChange={(v) => setF((p) => ({ ...p, secondaryManagerId: v }))}
-                placeholder="No change"
-                emptyLabel="No change"
-                loading={loadingEmps}
-                ariaLabel="Secondary manager"
+                ariaLabel="Reporting manager"
               />
             </Field>
             <Field label="Work location">

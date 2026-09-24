@@ -26,6 +26,12 @@ import {
   RefreshCw,
   ShieldCheck,
   AlertCircle,
+  Plane,
+  Inbox,
+  MapPin,
+  Smartphone,
+  Megaphone,
+  Navigation,
 } from "lucide-react";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
@@ -89,10 +95,143 @@ function Stat({ icon: Icon, label, value, hint, tone = "accent", href }) {
   );
 }
 
+/**
+ * The company TODAY — from /api/ceo/overview, one read. Each tile is a count
+ * with a link to the screen that owns the list behind it.
+ */
+function TodaySection({ data, loading }) {
+  const d = data;
+  const dash = (v) => (loading || v == null ? "—" : v);
+  const approvals = d?.approvals;
+  const field = d?.field;
+  const app = d?.app;
+  const dayLabel = d?.day
+    ? new Date(d.day).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })
+    : "";
+  const approvalsHint = approvals
+    ? `${approvals.leave} leave · ${approvals.corrections} corrections · ${approvals.overtime} overtime` +
+      (approvals.oldestWaitingDays ? ` · oldest ${approvals.oldestWaitingDays} day${approvals.oldestWaitingDays === 1 ? "" : "s"}` : "") +
+      (approvals.leaveWaitingForHr ? ` · ${approvals.leaveWaitingForHr} with no manager (HR decides)` : "")
+    : "";
+  return (
+    <section className="space-y-3">
+      <h2 className="ck-label">Today{dayLabel ? ` · ${dayLabel}` : ""}</h2>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Stat
+          icon={UserCheck}
+          label="Present today"
+          value={d?.attendance ? dash(d.attendance.present) : loading ? "—" : "Not synced"}
+          hint={
+            d?.attendance
+              ? `${d.attendance.late} late · of ${d.people.headcount} on the rolls`
+              : "The punch machine has not been synced for today yet"
+          }
+          href="/ceo/dashboard/hr/attendance"
+        />
+        <Stat
+          icon={Plane}
+          label="On leave today"
+          value={dash(d?.onLeave?.count)}
+          hint={(d?.onLeave?.people || []).slice(0, 3).map((p) => p.name + (p.half ? " (½)" : "")).join(", ") || "Nobody"}
+          href="/hr/dashboard/leaves"
+        />
+        <Stat
+          icon={Inbox}
+          label="Waiting for a decision"
+          value={dash(approvals?.total)}
+          tone={approvals?.oldestWaitingDays > 3 ? "danger" : approvals?.total ? "warn" : "accent"}
+          hint={approvalsHint}
+          href="/hr/dashboard/leaves"
+        />
+        <Stat
+          icon={Smartphone}
+          label="Using the app this week"
+          value={dash(app?.activeThisWeek)}
+          hint={app ? `${app.neverSignedIn} never signed in${app.versions?.[0] ? ` · most on v${app.versions[0].version}` : ""}` : ""}
+          href="/hr/dashboard/mobile-app"
+        />
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-5">
+        <Link href="/sales/dashboard/team" className="ck-panel p-4 lg:col-span-3 block transition-transform hover:-translate-y-0.5">
+          <div className="flex items-center gap-2">
+            <MapPin className="w-3.5 h-3.5" style={{ color: "var(--ck-accent)" }} />
+            <span className="ck-label">Field team today</span>
+          </div>
+          <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {[
+              ["On duty now", field?.onDutyNow, field ? `${field.reportingNow} reporting live` : ""],
+              ["Went out", field?.out, "recorded a route today"],
+              ["Kilometres", field?.km, "counted conservatively"],
+              ["Visits", field?.visits, "recorded on the phones"],
+            ].map(([label, value, hint]) => (
+              <div key={label}>
+                <div className="text-xs" style={{ color: "var(--ck-ink-3)" }}>{label}</div>
+                <div className="text-2xl font-semibold tabular-nums" style={{ color: "var(--ck-ink)" }}>{dash(value)}</div>
+                <div className="text-[11px]" style={{ color: "var(--ck-ink-3)" }}>{hint}</div>
+              </div>
+            ))}
+          </div>
+          {(field?.leaders || []).length ? (
+            <ul className="mt-3 space-y-1.5">
+              {field.leaders.map((l) => (
+                <li key={l.name} className="flex items-center gap-2 text-sm">
+                  <Navigation className="w-3.5 h-3.5 shrink-0" style={{ color: l.onDuty ? "var(--ck-accent)" : "var(--ck-ink-3)" }} />
+                  <span className="font-medium" style={{ color: "var(--ck-ink)" }}>{l.name}</span>
+                  <span className="tabular-nums" style={{ color: "var(--ck-ink-2)" }}>{l.km} km</span>
+                  {l.at ? (
+                    <span className="truncate" style={{ color: "var(--ck-ink-3)" }}>
+                      · {l.onDuty ? "now near" : "last near"} {l.at}
+                    </span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-3 text-xs" style={{ color: "var(--ck-ink-3)" }}>Nobody has recorded a route yet today.</p>
+          )}
+          <div className="mt-3 inline-flex items-center gap-1 text-xs font-medium" style={{ color: "var(--ck-accent)" }}>
+            Team on the map <ArrowRight className="w-3 h-3" />
+          </div>
+        </Link>
+
+        <Link href="/ceo/dashboard/announcements" className="ck-panel p-4 lg:col-span-2 block transition-transform hover:-translate-y-0.5">
+          <div className="flex items-center gap-2">
+            <Megaphone className="w-3.5 h-3.5" style={{ color: "var(--ck-accent)" }} />
+            <span className="ck-label">Last announcement</span>
+          </div>
+          {d?.announcement ? (
+            <>
+              <div className="mt-2 text-sm font-semibold" style={{ color: "var(--ck-ink)" }}>{d.announcement.title}</div>
+              <div className="mt-1 text-xs" style={{ color: "var(--ck-ink-3)" }}>
+                {new Date(d.announcement.sentAt).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}
+                {" · "}
+                {d.announcement.sentByName}
+              </div>
+              <div className="mt-3 text-2xl font-semibold tabular-nums" style={{ color: "var(--ck-ink)" }}>
+                {d.announcement.read}/{d.announcement.delivered}
+              </div>
+              <div className="text-[11px]" style={{ color: "var(--ck-ink-3)" }}>have opened it in the app</div>
+            </>
+          ) : (
+            <p className="mt-2 text-sm" style={{ color: "var(--ck-ink-3)" }}>
+              Nothing announced yet. Tell the whole company something — it lands on every phone.
+            </p>
+          )}
+          <div className="mt-3 inline-flex items-center gap-1 text-xs font-medium" style={{ color: "var(--ck-accent)" }}>
+            Write an announcement <ArrowRight className="w-3 h-3" />
+          </div>
+        </Link>
+      </div>
+    </section>
+  );
+}
+
 export default function ExecutiveOverviewPage() {
   const [employees, setEmployees] = useState(null);
   const [summary, setSummary] = useState(null);
   const [departments, setDepartments] = useState([]);
+  const [today, setToday] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
 
@@ -104,17 +243,20 @@ export default function ExecutiveOverviewPage() {
     try {
       // Asked for together rather than in sequence: three independent reads,
       // and waiting for each in turn is three round trips of blank screen.
-      const [empRes, sumRes, deptRes] = await Promise.all([
+      const [empRes, sumRes, deptRes, todayRes] = await Promise.all([
         fetch(`${API}/api/ceo/hr/employees?limit=1000`, { credentials: "include" }),
         fetch(`${API}/api/ceo/hr/attendance/summary?yearMonth=${ym}`, {
           credentials: "include",
         }),
         fetch(`${API}/api/ceo/hr/departments`, { credentials: "include" }),
+        fetch(`${API}/api/ceo/overview`, { credentials: "include" }),
       ]);
 
       const emp = await empRes.json().catch(() => null);
       const sum = await sumRes.json().catch(() => null);
       const dept = await deptRes.json().catch(() => null);
+      const now = await todayRes.json().catch(() => null);
+      if (now?.success) setToday(now.data);
 
       if (emp?.success) setEmployees(emp.data || emp.employees || []);
       if (sum?.success) setSummary(sum.data || null);
@@ -153,7 +295,7 @@ export default function ExecutiveOverviewPage() {
               Executive overview
             </h1>
             <p className="mt-1 text-sm" style={{ color: "var(--ck-ink-3)" }}>
-              The workforce as it stands, and who may open what.
+              The company today, the workforce as it stands, and who may open what.
             </p>
           </div>
 
@@ -177,6 +319,9 @@ export default function ExecutiveOverviewPage() {
           </div>
         ) : null}
 
+        <TodaySection data={today} loading={loading} />
+
+        <h2 className="ck-label pt-1">The workforce</h2>
         <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <Stat
             icon={Users}

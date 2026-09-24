@@ -523,16 +523,6 @@ export default function EmployeeViewPage() {
                     {employee.managers.primary.jobTitle}
                   </p>
                 </div>
-                {employee.managers.secondary && (
-                  <div className="border-t border-hairline pt-3">
-                    <p className="mb-1 text-xs text-ink-faint">
-                      Secondary Manager
-                    </p>
-                    <p className="text-sm font-medium text-ink">
-                      {employee.managers.secondary.name}
-                    </p>
-                  </div>
-                )}
               </div>
             ) : (
               <EmptyState compact title="No manager assigned" />

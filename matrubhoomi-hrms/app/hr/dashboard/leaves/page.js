@@ -1452,7 +1452,7 @@ function LeaveDrawer({ app, onClose, onApprove, onReject, actionLoading }) {
             {blockedByPrimary && (
               <div className="flex items-center gap-2 p-3 rounded-inset bg-[color-mix(in_srgb,var(--state-rework)_18%,transparent)] text-xs text-[var(--state-rework-ink)]">
                 <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
-                Waiting for primary manager approval before HR can act.
+                Waiting for the reporting manager’s approval before HR can act.
               </div>
             )}
             {!showReject ? (

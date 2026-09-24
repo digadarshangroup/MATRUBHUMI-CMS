@@ -706,7 +706,10 @@ function MgrField({
   onClear,
   isEditing,
 }) {
-  const label = type === "pri" ? "Primary Manager" : "Secondary Manager";
+  // One reporting manager per employee — their approval is final. The
+  // "secondary manager" of the old two-step chain is gone from the product;
+  // the backend no longer stores one (see routes/HrRoutes/Employee-Section.js).
+  const label = "Reporting Manager";
 
   const filtered = managers.filter(
     (e) =>
@@ -1268,8 +1271,8 @@ export default function EmployeeForm() {
     if (deptId) prefillDeptManagers(deptId);
   };
 
-  // Pull the department's assigned primary/secondary manager and drop them into
-  // the manager fields, unless the user already chose someone.
+  // Pull the department's reporting manager and drop them into the manager
+  // field, unless the user already chose someone.
   const prefillDeptManagers = async (deptId) => {
     try {
       const r = await fetch(`${API}/api/hr/departments/${deptId}`, {
@@ -1277,16 +1280,12 @@ export default function EmployeeForm() {
       });
       const d = await r.json();
       if (!d.success || !d.data) return;
-      const { primaryManager, secondaryManager } = d.data;
+      const { primaryManager } = d.data;
       setForm((p) => {
         const next = { ...p };
         if (!p.primaryManagerId && primaryManager?.managerId) {
           next.primaryManagerId = primaryManager.managerId;
           next.primaryManager = primaryManager.managerName || "";
-        }
-        if (!p.secondaryManagerId && secondaryManager?.managerId) {
-          next.secondaryManagerId = secondaryManager.managerId;
-          next.secondaryManager = secondaryManager.managerName || "";
         }
         return next;
       });
@@ -1564,14 +1563,6 @@ export default function EmployeeForm() {
             primaryManager: {
               managerId: form.primaryManagerId,
               managerName: form.primaryManager,
-            },
-          }
-        : {}),
-      ...(form.secondaryManagerId
-        ? {
-            secondaryManager: {
-              managerId: form.secondaryManagerId,
-              managerName: form.secondaryManager,
             },
           }
         : {}),
@@ -2479,24 +2470,6 @@ export default function EmployeeForm() {
                 }
                 isEditing={ed("work")}
               />
-              <MgrField
-                type="sec"
-                managers={managers}
-                selected={form.secondaryManager}
-                q={secQ}
-                setQ={setSecQ}
-                show={showSec}
-                setShow={setShowSec}
-                onPick={(emp) => pickMgr(emp, "sec")}
-                onClear={() =>
-                  setForm((p) => ({
-                    ...p,
-                    secondaryManagerId: "",
-                    secondaryManager: "",
-                  }))
-                }
-                isEditing={ed("work")}
-              />
             </>
           ) : (
             <>
@@ -2526,8 +2499,7 @@ export default function EmployeeForm() {
                 value={form.needsToOperate ? "Yes" : "No"}
               />
 
-              <Val label="Primary Manager" value={form.primaryManager} />
-              <Val label="Secondary Manager" value={form.secondaryManager} />
+              <Val label="Reporting Manager" value={form.primaryManager} />
             </>
           )}
         </Sec>

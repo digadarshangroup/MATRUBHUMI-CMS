@@ -278,8 +278,7 @@ function ProfileDrawer({ emp, fullData, loading, onClose }) {
                                     <Field label="Date of Joining" value={fmtDate(e?.dateOfJoining)}/>
                                     <Field label="Confirmation Date" value={fmtDate(e?.confirmationDate)}/>
                                     <Field label="Probation" value={e?.probationPeriod?`${e.probationPeriod} months`:null}/>
-                                    <Field label="Primary Manager" value={e?.primaryManager?.managerName}/>
-                                    <Field label="Secondary Manager" value={e?.secondaryManager?.managerName}/>
+                                    <Field label="Reporting Manager" value={e?.primaryManager?.managerName}/>
                                 </Section>
                                 {(e?.address?.current?.city||e?.address?.permanent?.city)&&(
                                     <Section icon={MapPin} title="Address" defaultOpen={false}>

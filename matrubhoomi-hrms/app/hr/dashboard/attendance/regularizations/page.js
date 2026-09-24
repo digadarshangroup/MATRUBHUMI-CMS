@@ -141,7 +141,31 @@ function plannedChanges(r) {
 }
 
 /**
- * Where the request sits in the primary → secondary manager chain.
+ * A field day filed by the app when a salesperson ended duty — said as such,
+ * with what the app recorded, so HR can tell it from a request somebody typed.
+ */
+function FieldDayNote({ request }) {
+    if (request?.source !== "field_duty") return null;
+    const fs = request.fieldSummary || {};
+    const bits = [
+        fs.distanceKm != null ? `${fs.distanceKm} km` : "",
+        fs.visits != null ? `${fs.visits} visit${fs.visits === 1 ? "" : "s"}` : "",
+        fs.stops != null ? `${fs.stops} stop${fs.stops === 1 ? "" : "s"}` : "",
+    ].filter(Boolean);
+    return (
+        <p className="mt-1.5 flex items-center gap-1.5 text-xs text-ink-muted">
+            <MapPin className="h-3 w-3 shrink-0 text-ink-faint" />
+            <span>
+                Field day recorded by the app{bits.length ? ` · ${bits.join(" · ")}` : ""}
+            </span>
+        </p>
+    );
+}
+
+/**
+ * Where the request sits in the manager chain. New requests have one
+ * reporting manager, whose approval is final; an older request may still carry
+ * a second step, and is shown as it was filed.
  * Read from the frozen managersNotified snapshot plus the decisions recorded
  * against it — the same two arrays the app's approve/reject handlers key off.
  */
@@ -157,7 +181,7 @@ function chain(r) {
     switch (r.status) {
         case "pending":
             summary = primary
-                ? `Awaiting ${nameOf(primary, "primary manager")}`
+                ? `Awaiting ${nameOf(primary, "reporting manager")}`
                 : "No manager assigned — HR must decide";
             break;
         case "manager_approved":
@@ -536,6 +560,8 @@ function RequestCard({ request, onClick }) {
                         {link.summary}
                     </p>
 
+                    <FieldDayNote request={request} />
+
                     {/* Reason preview */}
                     {request.reason && (
                         <p className="mt-1.5 line-clamp-2 text-xs text-ink-muted">
@@ -692,6 +718,7 @@ function RequestDrawer({ request, onClose, onApprove, onReject }) {
                             {/* Reason */}
                             <Section title="Employee's reason" icon={MessageSquare}>
                                 <p className="whitespace-pre-wrap text-sm leading-relaxed text-ink-muted">{request.reason || "—"}</p>
+                                <FieldDayNote request={request} />
                             </Section>
 
                             {/* Approval chain */}
@@ -827,7 +854,7 @@ function RequestDrawer({ request, onClose, onApprove, onReject }) {
                                 <div className="flex items-start gap-2 rounded-card bg-[color-mix(in_srgb,var(--state-rework)_20%,transparent)] p-3 text-xs text-[var(--state-rework-ink)]">
                                     <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                                     <span>
-                                        <strong>{link.primary?.managerName || "The primary manager"}</strong> has not
+                                        <strong>{link.primary?.managerName || "The reporting manager"}</strong> has not
                                         decided on this yet. Approving now closes the request without their review.
                                     </span>
                                 </div>
@@ -924,7 +951,7 @@ function ChainTrack({ request, link }) {
         decisions.find((d) => d.type === m?.type);
 
     const steps = [];
-    if (primary) steps.push({ role: "Primary manager", m: primary });
+    if (primary) steps.push({ role: "Reporting manager", m: primary });
     if (secondary) steps.push({ role: "Secondary manager", m: secondary });
 
     return (
