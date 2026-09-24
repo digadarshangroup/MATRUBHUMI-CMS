@@ -46,7 +46,11 @@ export const metadata = {
     // A browser handed one 512px PNG for a 16px favicon slot downloads 384KB to
     // draw 256 pixels, and scales it with a box filter that turns the brickwork
     // into mud. These are resized from the master with a proper filter at build
-    // time — see the generator alongside public/matrubhoomi-logo-master.png.
+    // time by scripts/generate-brand-assets.mjs, from the master artwork in
+    // public/matrubhoomi-logo-master.webp.
+    //
+    // These three are the EMBLEM alone, not the full lockup. The wordmark under
+    // the badge is four pixels tall in a 32px favicon and reads as a smudge.
     icon: [
       { url: "/favicon-16.png", sizes: "16x16", type: "image/png" },
       { url: "/favicon-32.png", sizes: "32x32", type: "image/png" },

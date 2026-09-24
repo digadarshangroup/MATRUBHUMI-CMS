@@ -57,3 +57,7 @@ Thumbs.db
 # secrets (Atlas URI, JWT secret, Cloudinary, Twilio, Brevo) ended up staged
 # for a push to a remote. The snapshots are local undo, never source.
 .history/
+
+# Generated intermediate from scripts/generate-brand-assets.mjs — the logo
+# data URI is pasted into source, so the scratch copy is not worth committing.
+matrubhoomi-hrms/scripts/.brand-logo-datauri.txt

@@ -146,7 +146,14 @@ export default function DepartmentRail({ departments = [], current }) {
         aria-expanded={expanded}
         title="Departments"
       >
-        <img src="/matrubhoomi-mark.svg" alt="Matrubhoomi" className="g-rail-logoimg" />
+        {/* The emblem crop, not the whole lockup: this slot is 34px, and the
+            MATRUBHOOMI wordmark under the badge is illegible at that size.
+            A PNG rather than the old .svg because the artwork is illustrated —
+            brickwork, a glass wave, a drop shadow — and there is no honest
+            vector of it. Rendered at 192px for the retina case; see
+            scripts/generate-brand-assets.mjs. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/matrubhoomi-logo-192.png" alt="Matrubhoomi" className="g-rail-logoimg" />
       </button>
 
       <div className="g-rail-list">
