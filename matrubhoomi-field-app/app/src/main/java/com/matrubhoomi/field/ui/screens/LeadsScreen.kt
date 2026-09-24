@@ -115,7 +115,7 @@ fun LeadsScreen(vm: AppViewModel, onOpenLead: (String) -> Unit) {
             TopAppBar(
                 title = {
                     Column {
-                        Text("Leads", style = MaterialTheme.typography.titleLarge)
+                        Text("Customers", style = MaterialTheme.typography.titleLarge)
                         if (!loading && problem == null) {
                             Text(
                                 "${leads.size} ${if (leads.size == 1) "person" else "people"}",
@@ -125,6 +125,7 @@ fun LeadsScreen(vm: AppViewModel, onOpenLead: (String) -> Unit) {
                         }
                     }
                 },
+                navigationIcon = { com.matrubhoomi.field.ui.components.NavIcon() },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
                 ),
@@ -150,7 +151,7 @@ fun LeadsScreen(vm: AppViewModel, onOpenLead: (String) -> Unit) {
 
             Spacer(Modifier.height(10.dp))
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            com.matrubhoomi.field.ui.components.ChipFlow {
                 Scope.entries.forEach { option ->
                     FilterChip(
                         selected = scope == option,

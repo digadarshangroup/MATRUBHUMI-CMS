@@ -23,12 +23,21 @@ import org.json.JSONObject
  * "saved", and a worker delivers it whenever the network allows. The employee is
  * never waiting on a socket, and nothing is ever lost to one.
  *
+ * EVERY ROW BELONGS TO THE PERSON WHO RECORDED IT
+ * -----------------------------------------------
+ * `employee_id` on every table, and every read filtered by it. A handset can
+ * change hands between sign-ins, and the server attributes whatever it receives
+ * to whoever's session sent it — so without this, positions one employee
+ * recorded before signing out were delivered as the NEXT employee's movements.
+ * Rows from before the column existed have none and belong to whoever signs in,
+ * which is what they always did.
+ *
  * WHY SQLITE DIRECTLY, WITHOUT ROOM
  * ---------------------------------
- * Three tables and a dozen statements. Room would add an annotation processor,
+ * A few tables and a dozen statements. Room would add an annotation processor,
  * a build plugin and generated code to express the same thing, and its main
  * benefit — compile-time-checked queries over an evolving schema — is worth
- * little for a schema this small that is written once.
+ * little for a schema this small.
  */
 class FieldDb(context: Context) : SQLiteOpenHelper(context.applicationContext, NAME, null, VERSION) {
 
@@ -43,7 +52,8 @@ class FieldDb(context: Context) : SQLiteOpenHelper(context.applicationContext, N
               battery INTEGER, is_charging INTEGER DEFAULT 0,
               is_mock INTEGER DEFAULT 0, is_moving INTEGER DEFAULT 0,
               provider TEXT, activity TEXT, source TEXT DEFAULT 'service',
-              task_id TEXT, lead_id TEXT
+              task_id TEXT, lead_id TEXT,
+              employee_id TEXT
             )
             """.trimIndent(),
         )
@@ -59,22 +69,98 @@ class FieldDb(context: Context) : SQLiteOpenHelper(context.applicationContext, N
               created_at INTEGER NOT NULL,
               attempts INTEGER NOT NULL DEFAULT 0,
               last_error TEXT,
-              state TEXT NOT NULL DEFAULT 'pending'
+              state TEXT NOT NULL DEFAULT 'pending',
+              employee_id TEXT
             )
             """.trimIndent(),
         )
         db.execSQL("CREATE INDEX idx_sub_state ON submissions(state, created_at)")
+
+        createEvents(db)
+    }
+
+    /**
+     * Duty switched on or off — queued like everything else, because the
+     * moment somebody ends duty in a dead spot is exactly the moment the
+     * request would fail. `ref` is the handset's own id for the event, which
+     * the server uses to make a second delivery a no-op.
+     */
+    private fun createEvents(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS events (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              kind TEXT NOT NULL,
+              state TEXT NOT NULL,
+              at INTEGER NOT NULL,
+              ref TEXT NOT NULL UNIQUE,
+              lat REAL, lng REAL,
+              attempts INTEGER NOT NULL DEFAULT 0,
+              employee_id TEXT
+            )
+            """.trimIndent(),
+        )
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // There is no migration to write yet, and dropping is safe ONLY because
-        // this database is an outbox: anything in it that has already been
-        // delivered is on the server, and anything that has not is lost.
-        // The day this holds anything that is not a copy, this must become a
-        // real migration.
-        db.execSQL("DROP TABLE IF EXISTS pings")
-        db.execSQL("DROP TABLE IF EXISTS submissions")
-        onCreate(db)
+        // A REAL migration now. Version 1 dropped and recreated everything on
+        // upgrade, which was "safe" only while nothing needed to survive it —
+        // but an update installed at lunchtime would have thrown away the
+        // morning's undelivered visits. Each step below only ADDS.
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE pings ADD COLUMN employee_id TEXT")
+            db.execSQL("ALTER TABLE submissions ADD COLUMN employee_id TEXT")
+            createEvents(db)
+        }
+    }
+
+    /** Rows of this employee, and rows from before ownership was recorded. */
+    private fun mine(employeeId: String?): Pair<String, Array<String>> =
+        if (employeeId.isNullOrBlank()) "employee_id IS NULL" to emptyArray()
+        else "(employee_id = ? OR employee_id IS NULL)" to arrayOf(employeeId)
+
+    /* ── Duty events ──────────────────────────────────────────────── */
+
+    fun enqueueDutyEvent(state: String, at: Long, ref: String, lat: Double?, lng: Double?, employeeId: String?) {
+        val values = ContentValues().apply {
+            put("kind", "duty")
+            put("state", state)
+            put("at", at)
+            put("ref", ref)
+            put("lat", lat)
+            put("lng", lng)
+            put("employee_id", employeeId)
+        }
+        writableDatabase.insertWithOnConflict("events", null, values, SQLiteDatabase.CONFLICT_IGNORE)
+    }
+
+    /** Oldest first — "on" must reach the server before the "off" that closes it. */
+    fun takeDutyEvents(employeeId: String?, limit: Int = 20): Pair<List<Long>, JSONArray> {
+        val ids = ArrayList<Long>()
+        val array = JSONArray()
+        val (where, args) = mine(employeeId)
+        readableDatabase.query(
+            "events", null, "kind = 'duty' AND $where", args, null, null, "at ASC, id ASC", limit.toString(),
+        ).use { c ->
+            while (c.moveToNext()) {
+                ids.add(c.getLong(c.getColumnIndexOrThrow("id")))
+                array.put(
+                    JSONObject().apply {
+                        put("state", c.getString(c.getColumnIndexOrThrow("state")))
+                        put("at", isoUtc(c.getLong(c.getColumnIndexOrThrow("at"))))
+                        put("ref", c.getString(c.getColumnIndexOrThrow("ref")))
+                        c.optDouble("lat")?.let { put("lat", it) }
+                        c.optDouble("lng")?.let { put("lng", it) }
+                    },
+                )
+            }
+        }
+        return ids to array
+    }
+
+    fun deleteEvents(ids: List<Long>) {
+        if (ids.isEmpty()) return
+        writableDatabase.execSQL("DELETE FROM events WHERE id IN (${ids.joinToString(",")})")
     }
 
     /* ── Location fixes ───────────────────────────────────────────── */
@@ -85,6 +171,7 @@ class FieldDb(context: Context) : SQLiteOpenHelper(context.applicationContext, N
         isCharging: Boolean,
         isMoving: Boolean,
         activity: String,
+        employeeId: String?,
         source: String = "service",
         taskId: String? = null,
         leadId: String? = null,
@@ -106,6 +193,7 @@ class FieldDb(context: Context) : SQLiteOpenHelper(context.applicationContext, N
             put("source", source)
             put("task_id", taskId)
             put("lead_id", leadId)
+            put("employee_id", employeeId)
         }
         writableDatabase.insert("pings", null, values)
     }
@@ -118,12 +206,13 @@ class FieldDb(context: Context) : SQLiteOpenHelper(context.applicationContext, N
      * signal is delivered in the order it happened, and the server's distance
      * walk depends on that order being right.
      */
-    fun takePings(limit: Int): Pair<List<Long>, JSONArray> {
+    fun takePings(employeeId: String?, limit: Int): Pair<List<Long>, JSONArray> {
         val ids = ArrayList<Long>()
         val array = JSONArray()
+        val (where, args) = mine(employeeId)
 
         readableDatabase.query(
-            "pings", null, null, null, null, null, "recorded_at ASC", limit.toString(),
+            "pings", null, where, args, null, null, "recorded_at ASC", limit.toString(),
         ).use { c ->
             while (c.moveToNext()) {
                 ids.add(c.getLong(c.getColumnIndexOrThrow("id")))
@@ -160,7 +249,7 @@ class FieldDb(context: Context) : SQLiteOpenHelper(context.applicationContext, N
         writableDatabase.execSQL("DELETE FROM pings WHERE id IN (${ids.joinToString(",")})")
     }
 
-    fun pingCount(): Int = countOf("pings")
+    fun pingCount(employeeId: String?): Int = countOf("pings", mine(employeeId))
 
     /**
      * Drop the oldest fixes when the queue has grown beyond reason.
@@ -180,13 +269,14 @@ class FieldDb(context: Context) : SQLiteOpenHelper(context.applicationContext, N
     /* ── Submissions ──────────────────────────────────────────────── */
 
     /** @param photos local file paths still to be uploaded, with their field keys. */
-    fun enqueueSubmission(clientRef: String, payload: JSONObject, photos: JSONArray) {
+    fun enqueueSubmission(clientRef: String, payload: JSONObject, photos: JSONArray, employeeId: String?) {
         val values = ContentValues().apply {
             put("client_ref", clientRef)
             put("payload", payload.toString())
             put("photos", photos.toString())
             put("created_at", System.currentTimeMillis())
             put("state", "pending")
+            put("employee_id", employeeId)
         }
         // CONFLICT_IGNORE, not REPLACE: the client_ref is what makes a retry
         // idempotent, and a second write under the same ref is the same record
@@ -202,25 +292,8 @@ class FieldDb(context: Context) : SQLiteOpenHelper(context.applicationContext, N
         val attempts: Int,
     )
 
-    fun pendingSubmissions(limit: Int = 20): List<Queued> {
-        val out = ArrayList<Queued>()
-        readableDatabase.query(
-            "submissions", null, "state = ?", arrayOf("pending"), null, null, "created_at ASC", limit.toString(),
-        ).use { c ->
-            while (c.moveToNext()) {
-                out.add(
-                    Queued(
-                        id = c.getLong(c.getColumnIndexOrThrow("id")),
-                        clientRef = c.getString(c.getColumnIndexOrThrow("client_ref")),
-                        payload = JSONObject(c.getString(c.getColumnIndexOrThrow("payload"))),
-                        photos = JSONArray(c.getString(c.getColumnIndexOrThrow("photos"))),
-                        attempts = c.getInt(c.getColumnIndexOrThrow("attempts")),
-                    ),
-                )
-            }
-        }
-        return out
-    }
+    fun pendingSubmissions(employeeId: String?, limit: Int = 20): List<Queued> =
+        querySubmissions("state = 'pending'", employeeId, "created_at ASC", limit)
 
     fun markSent(id: Long) {
         writableDatabase.delete("submissions", "id = ?", arrayOf(id.toString()))
@@ -262,13 +335,20 @@ class FieldDb(context: Context) : SQLiteOpenHelper(context.applicationContext, N
         )
     }
 
-    fun pendingCount(): Int = countOf("submissions", "state = 'pending'")
-    fun rejectedCount(): Int = countOf("submissions", "state = 'rejected'")
+    fun pendingCount(employeeId: String?): Int =
+        mine(employeeId).let { (w, a) -> countOf("submissions", "state = 'pending' AND $w" to a) }
 
-    fun rejected(): List<Queued> {
+    fun rejectedCount(employeeId: String?): Int =
+        mine(employeeId).let { (w, a) -> countOf("submissions", "state = 'rejected' AND $w" to a) }
+
+    fun rejected(employeeId: String?): List<Queued> =
+        querySubmissions("state = 'rejected'", employeeId, "created_at DESC", 50)
+
+    private fun querySubmissions(state: String, employeeId: String?, order: String, limit: Int): List<Queued> {
         val out = ArrayList<Queued>()
+        val (where, args) = mine(employeeId)
         readableDatabase.query(
-            "submissions", null, "state = ?", arrayOf("rejected"), null, null, "created_at DESC", "50",
+            "submissions", null, "$state AND $where", args, null, null, order, limit.toString(),
         ).use { c ->
             while (c.moveToNext()) {
                 out.add(
@@ -285,16 +365,17 @@ class FieldDb(context: Context) : SQLiteOpenHelper(context.applicationContext, N
         return out
     }
 
-    private fun countOf(table: String, where: String? = null): Int {
-        val sql = "SELECT COUNT(*) FROM $table" + if (where != null) " WHERE $where" else ""
-        readableDatabase.rawQuery(sql, null).use { c ->
+    private fun countOf(table: String, where: Pair<String, Array<String>>? = null): Int {
+        val sql = "SELECT COUNT(*) FROM $table" + if (where != null) " WHERE ${where.first}" else ""
+        readableDatabase.rawQuery(sql, where?.second ?: emptyArray()).use { c ->
             return if (c.moveToFirst()) c.getInt(0) else 0
         }
     }
 
     companion object {
         private const val NAME = "field_outbox.db"
-        private const val VERSION = 1
+        // 2: `events` (duty on/off) and `employee_id` everywhere. Additive only.
+        private const val VERSION = 2
 
         @Volatile private var instance: FieldDb? = null
         fun get(context: Context): FieldDb =

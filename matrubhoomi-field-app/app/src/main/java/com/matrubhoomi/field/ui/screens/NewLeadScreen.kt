@@ -198,7 +198,7 @@ fun NewLeadScreen(
             Card {
                 SectionLabel("What they are")
                 Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                com.matrubhoomi.field.ui.components.ChipFlow {
                     listOf("farmer" to "Farmer", "dealer" to "Dealer", "other" to "Other").forEach { (id, label) ->
                         FilterChip(
                             selected = category == id,

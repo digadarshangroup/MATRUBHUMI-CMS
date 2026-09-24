@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
@@ -76,11 +77,14 @@ fun SectionLabel(text: String, modifier: Modifier = Modifier) {
 fun Chip(text: String, tone: Color = MaterialTheme.colorScheme.onSurfaceVariant) {
     Box(
         Modifier
+            // A status is never allowed to push the thing it describes off
+            // the card: past this width it shrinks rather than wraps.
+            .widthIn(max = 168.dp)
             .background(tone.copy(alpha = 0.12f), RoundedCornerShape(999.dp))
             .border(1.dp, tone.copy(alpha = 0.24f), RoundedCornerShape(999.dp))
             .padding(horizontal = 10.dp, vertical = 5.dp),
     ) {
-        Text(text, style = MaterialTheme.typography.labelMedium, color = tone)
+        FitText(text, style = MaterialTheme.typography.labelMedium, color = tone, minScale = 0.8f)
     }
 }
 
@@ -190,19 +194,23 @@ fun StatTile(
         color = tone.copy(alpha = 0.08f),
     ) {
         Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
-            Text(
+            FitText(
                 value,
                 style = MaterialTheme.typography.titleLarge,
                 color = tone,
-                maxLines = 1,
             )
             Spacer(Modifier.height(2.dp))
-            Text(
-                label,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-            )
+            // One word is never split across lines ("prese / nt" in a narrow
+            // tile): it shrinks instead. Several words wrap between words.
+            if (!label.trim().contains(' ')) {
+                FitText(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                WrapText(
+                    label,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -321,7 +329,7 @@ fun BigButton(
             Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(10.dp))
         }
-        Text(text, style = MaterialTheme.typography.labelLarge)
+        FitText(text, style = MaterialTheme.typography.labelLarge)
     }
 }
 
@@ -339,11 +347,14 @@ fun BigOutlinedButton(
         enabled = enabled,
         modifier = modifier.height(52.dp),
         shape = RoundedCornerShape(14.dp),
+        // Narrower than Material's 24dp: three of these share a row on a 5"
+        // handset, and "Tomorrow" was breaking into "Tomorro / w".
+        contentPadding = PaddingValues(horizontal = 12.dp),
     ) {
         if (icon != null) {
             Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(8.dp))
         }
-        Text(text, style = MaterialTheme.typography.labelLarge)
+        FitText(text, style = MaterialTheme.typography.labelLarge)
     }
 }

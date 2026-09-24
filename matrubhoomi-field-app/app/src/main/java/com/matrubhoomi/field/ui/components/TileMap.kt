@@ -49,6 +49,11 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
@@ -72,20 +77,20 @@ import kotlin.math.tan
  * A real map — streets or satellite — that pans and zooms, with no mapping
  * library and no API key.
  *
- * THE TILE PROVIDERS, AND WHY THESE TWO
- * -------------------------------------
- * This started on OpenStreetMap's own tile server. That server is run on
- * donated capacity for the project's own use; it has no CDN in front of it for
- * most of the world, it rate-limits, and it looks it — which is exactly the
- * "slow and not accurate" it was. It is a courtesy, not a service.
- *
- *   STREETS   Carto Voyager. The same OSM data, rendered by Carto and served
- *             from a real CDN, at @2x for a phone screen. Fast, current, and
- *             free for this kind of use.
- *   SATELLITE Esri World Imagery. Keyless, global, and in India considerably
- *             sharper than anything else available without a contract — which
- *             matters here, because a field employee recognises a farm from the
- *             air long before they recognise it from a street name.
+ * THE TILE PROVIDERS, AND WHY THESE
+ * ---------------------------------
+ *   STREETS   OpenStreetMap's standard tiles — the same map the CMS shows. The
+ *             streets layer used to be Carto Voyager, until Carto began serving
+ *             keyless requests as blurred tiles stamped "API KEY REQUIRED";
+ *             that is what the whole field team would have been looking at.
+ *             OSM's server is a shared resource: its policy asks for a real
+ *             User-Agent (sent, see loadTile) and light use, which a company's
+ *             field team is, and the disk cache below keeps it light.
+ *   SATELLITE Esri World Imagery, with Esri's own place-name sheet over it.
+ *             Keyless, global, and in India considerably sharper than anything
+ *             else available without a contract — which matters here, because
+ *             a field employee recognises a farm from the air long before they
+ *             recognise it from a street name.
  *
  * Neither needs a key or a billing account. Both REQUIRE their attribution, and
  * it is drawn in the corner for whichever is showing; removing it breaks the
@@ -110,11 +115,10 @@ enum class MapLayer(
 ) {
     Streets(
         label = "Map",
-        // @2x tiles: on a 3x-density phone a 256px tile is a blurry stamp.
-        base = TileSource("https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png", 20f),
+        base = TileSource("https://tile.openstreetmap.org/{z}/{x}/{y}.png", 19f),
         overlays = emptyList(),   // this one already carries its own labels
-        maxZoom = 20f,
-        attribution = "© OpenStreetMap © CARTO",
+        maxZoom = 19f,
+        attribution = "© OpenStreetMap contributors",
     ),
     Satellite(
         label = "Satellite",
@@ -134,9 +138,8 @@ enum class MapLayer(
         //
         // This is the standard fix and the reason every satellite map you have
         // ever used is really two layers: a transparent sheet of labels sits on
-        // top. Carto's is the one used here because it is the same cartography
-        // as the Map layer, it is retina, and it goes to zoom 20 — so the
-        // labels never run out before the imagery does.
+        // top. Esri's own reference sheet is the one used here: it is drawn for
+        // exactly this imagery, needs no key, and reaches the same zoom.
         //
         // WHAT IT DOES NOT CARRY, honestly: individual businesses. Shop, hotel
         // and restaurant names come from OpenStreetMap's own POI data, which is
@@ -151,10 +154,13 @@ enum class MapLayer(
         // as you panned. The base imagery is 256px anyway, so the labels now
         // match it exactly rather than being downsampled into it.
         overlays = listOf(
-            TileSource("https://basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}.png", 20f),
+            TileSource(
+                "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
+                19f,
+            ),
         ),
         maxZoom = 19f,
-        attribution = "Esri, Maxar · labels © OpenStreetMap © CARTO",
+        attribution = "Esri, Maxar, Earthstar Geographics",
     ),
     ;
 
@@ -162,12 +168,39 @@ enum class MapLayer(
     val sources: List<TileSource> get() = listOf(base) + overlays
 }
 
-private const val TILE_SIZE = 256
+/**
+ * How many screen pixels one tile covers — TWICE the 256 the images are.
+ *
+ * Neither provider serves retina tiles without a key, and a 256px tile drawn
+ * at 256 device pixels on a 3x phone puts street names at four points high.
+ * Drawn at 512 the text is the size it was when the tiles were @2x, a little
+ * softer; each tile also covers four times the ground, so a screenful needs a
+ * quarter of the tiles, the memory and the requests.
+ */
+private const val TILE_SIZE = 512
 private const val MIN_ZOOM = 2f
 
 data class MapPoint(val lat: Double, val lng: Double)
 
-data class MapMarker(val point: MapPoint, val label: String = "", val isPrimary: Boolean = true)
+/**
+ * What a pin means, which decides how it is drawn.
+ *
+ *   Pin       a plain place — a farm, a lead
+ *   Numbered  a stop on the day's round, with its number in it, matching the
+ *             numbered list under the map
+ *   Visit     a recorded visit — small, so a stop with three visits in it
+ *             still reads as one stop
+ *   Current   where the phone is now: the one thing on the map drawn to be
+ *             found at a glance
+ */
+enum class MarkerKind { Pin, Numbered, Visit, Current }
+
+data class MapMarker(
+    val point: MapPoint,
+    val label: String = "",
+    val isPrimary: Boolean = true,
+    val kind: MarkerKind = MarkerKind.Pin,
+)
 
 /* ── Web mercator ──────────────────────────────────────────────────── */
 
@@ -188,7 +221,8 @@ private fun worldYToLat(y: Double, zoom: Float): Double {
 }
 
 private fun metresPerPixel(lat: Double, zoom: Float): Double =
-    156543.03392 * cos(lat * PI / 180.0) / 2.0.pow(zoom.toDouble())
+    // 156543 m/px is zoom 0 for a 256px tile; the world here is TILE_SIZE wide.
+    156543.03392 * cos(lat * PI / 180.0) / 2.0.pow(zoom.toDouble()) * (256.0 / TILE_SIZE)
 
 /* ── Tiles ─────────────────────────────────────────────────────────── */
 
@@ -300,6 +334,8 @@ fun TileMap(
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val tiles = remember { mutableStateMapOf<String, ImageBitmap>() }
+    val measurer = rememberTextMeasurer()
+    val numberStyle = TextStyle(color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
 
     /*
      * THE CACHE IS BOUNDED IN BYTES, NOT IN TILES.
@@ -360,7 +396,7 @@ fun TileMap(
             val maxLng = all.maxOf { it.lng }
             centre = MapPoint((minLat + maxLat) / 2, (minLng + maxLng) / 2)
 
-            if (all.size == 1) { zoom = 17f; return }
+            if (all.size == 1) { zoom = 16f; return }
 
             var best = MIN_ZOOM
             var z = layer.maxZoom
@@ -663,12 +699,40 @@ fun TileMap(
                 drawCircle(lineColor, radius = 11f, center = end)
             }
 
-            markers.forEach { marker ->
+            // Visits first, then stops, then "now" — so the thing most worth
+            // finding is never hidden under something drawn after it.
+            markers.sortedBy { it.kind.ordinal.let { k -> if (k == MarkerKind.Visit.ordinal) -1 else k } }.forEach { marker ->
                 val o = toScreen(marker.point)
                 val tone = if (marker.isPrimary) lineColor else Color(0xFF2C7DA0)
-                drawCircle(tone.copy(alpha = 0.22f), radius = 22f, center = o)
-                drawCircle(Color.White, radius = 13f, center = o)
-                drawCircle(tone, radius = 9f, center = o)
+                when (marker.kind) {
+                    MarkerKind.Pin -> {
+                        drawCircle(tone.copy(alpha = 0.22f), radius = 22f, center = o)
+                        drawCircle(Color.White, radius = 13f, center = o)
+                        drawCircle(tone, radius = 9f, center = o)
+                    }
+                    MarkerKind.Visit -> {
+                        drawCircle(Color.White, radius = 10f, center = o)
+                        drawCircle(Color(0xFF2C7DA0), radius = 7f, center = o)
+                    }
+                    MarkerKind.Numbered -> {
+                        drawCircle(Color.Black.copy(alpha = 0.18f), radius = 25f, center = o + Offset(0f, 2f))
+                        drawCircle(Color.White, radius = 24f, center = o)
+                        drawCircle(tone, radius = 20f, center = o)
+                        if (marker.label.isNotBlank()) {
+                            val text = measurer.measure(marker.label, style = numberStyle)
+                            drawText(
+                                text,
+                                topLeft = Offset(o.x - text.size.width / 2f, o.y - text.size.height / 2f),
+                            )
+                        }
+                    }
+                    MarkerKind.Current -> {
+                        val blue = Color(0xFF1A73E8)
+                        drawCircle(blue.copy(alpha = 0.18f), radius = 38f, center = o)
+                        drawCircle(Color.White, radius = 17f, center = o)
+                        drawCircle(blue, radius = 12f, center = o)
+                    }
+                }
             }
         }
 

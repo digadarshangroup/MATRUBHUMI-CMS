@@ -4,4 +4,10 @@
          uploaded and then irrelevant, and cache is what Android reclaims first
          when a handset runs out of room. -->
     <cache-path name="photos" path="photos/" />
+    <!-- Payslips downloaded to be opened in the phone's PDF viewer. Handed to
+         that viewer for this one file only, through the FileProvider grant —
+         never written anywhere another app could read it unasked. -->
+    <cache-path name="payslips" path="payslips/" />
+    <!-- An overtime proof picked from the gallery, copied here to be uploaded. -->
+    <cache-path name="proofs" path="proofs/" />
 </paths>

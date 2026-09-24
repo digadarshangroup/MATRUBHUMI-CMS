@@ -40,7 +40,16 @@
       background. An inexact alarm firing would find itself unable to restart
       the very service it exists to restart.
     -->
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />
+    <!--
+      From Android 13, SCHEDULE_EXACT_ALARM is OFF for a new install and has to
+      be switched on by hand in "Alarms & reminders" — which employees could not
+      find, so the app kept listing it as missing. USE_EXACT_ALARM is granted at
+      install and cannot be revoked. Play restricts it to alarm-clock and
+      calendar apps; this app is installed by the company, not from Play (see
+      the battery note above).
+    -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
 
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />

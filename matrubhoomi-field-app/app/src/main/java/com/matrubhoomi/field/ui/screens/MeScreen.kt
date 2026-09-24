@@ -17,225 +17,174 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.outlined.AccessTime
+import androidx.compose.material.icons.outlined.AccountBalanceWallet
+import androidx.compose.material.icons.outlined.BeachAccess
+import androidx.compose.material.icons.outlined.BuildCircle
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.CloudUpload
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.EmojiEvents
 import androidx.compose.material.icons.outlined.EventAvailable
+import androidx.compose.material.icons.automirrored.outlined.FactCheck
+import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.matrubhoomi.field.data.ApiResult
-import com.matrubhoomi.field.data.AttendanceDay
-import com.matrubhoomi.field.data.LeaveBalance
+import com.matrubhoomi.field.core.trimNumber
 import com.matrubhoomi.field.data.Repository
 import com.matrubhoomi.field.ui.AppViewModel
+import com.matrubhoomi.field.ui.components.AccentCard
+import com.matrubhoomi.field.ui.components.Avatar
 import com.matrubhoomi.field.ui.components.Card
 import com.matrubhoomi.field.ui.components.Chip
+import com.matrubhoomi.field.ui.components.MenuRow
+import com.matrubhoomi.field.ui.components.ScreenBar
+import com.matrubhoomi.field.ui.components.SectionHeader
 import com.matrubhoomi.field.ui.components.SectionLabel
 import com.matrubhoomi.field.ui.components.StatTile
-import com.matrubhoomi.field.ui.components.Avatar
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import com.matrubhoomi.field.ui.components.rememberFetch
 
 /**
- * The employee's own record — attendance, leave, and the way into everything
- * administrative.
+ * The employee's own corner — today's attendance, leave left, and a door to
+ * every administrative thing, whoever they are.
  *
- * WHY THIS IS IN THE SALES APP AT ALL
- * -----------------------------------
- * A field employee carries one phone. Making them install a second app to see
- * whether they were marked present, or to ask for a day off, is a decision made
- * for the convenience of whoever drew the module boundaries. The data is the
- * same rolls and the same endpoints the portal uses — nothing here is a copy.
- *
- * The top of the screen answers the question people actually open it for:
- * am I marked in today, and how many days do I have left.
+ * The top answers the two questions people actually open it for: am I marked
+ * in today, and how many days do I have left. Below that, the same places the
+ * menu lists, as a page — some people never find a drawer.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MeScreen(
-    vm: AppViewModel,
-    onOpenAttendance: () -> Unit,
-    onOpenLeave: () -> Unit,
-    onOpenSettings: () -> Unit,
-) {
+fun MeScreen(vm: AppViewModel, onOpen: (String) -> Unit) {
     val state by vm.state.collectAsState()
     val context = LocalContext.current
     val repo = remember { Repository.get(context) }
+    val caps = state.caps
+    val p = state.profile
 
-    var today by remember { mutableStateOf<AttendanceDay?>(null) }
-    var balance by remember { mutableStateOf(LeaveBalance.EMPTY) }
-    var loaded by remember { mutableStateOf(false) }
+    val today = rememberFetch("today") { repo.attendanceToday() }
+    val book = rememberFetch("book") { repo.leaveBook() }
 
-    LaunchedEffect(Unit) {
-        val attendance = withContext(Dispatchers.IO) { repo.attendanceToday() }
-        if (attendance is ApiResult.Ok) today = attendance.value
-        val leave = withContext(Dispatchers.IO) { repo.leaveBalance() }
-        if (leave is ApiResult.Ok) balance = leave.value
-        loaded = true
-    }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(state.employeeName.ifBlank { "You" }, style = MaterialTheme.typography.titleLarge)
-                        Text(
-                            "Attendance, leave and settings",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ),
-            )
-        },
-    ) { padding ->
+    Scaffold(topBar = { ScreenBar("Me", "Attendance, leave, pay and settings") }) { padding ->
         LazyColumn(
-            Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 16.dp),
+            Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item { Spacer(Modifier.height(2.dp)) }
 
-            /* ── Who this is ───────────────────────────────────── */
-            //
-            // The name was already in the app bar, where it is 14sp and scrolls
-            // away. This is a handset several people may pick up over a shift,
-            // and "whose account am I looking at" should be answerable without
-            // scrolling to the top.
-
+            /* ── Who this is ─────────────────────────────────────── */
+            // A handset several people may pick up over a shift: "whose account
+            // is this" should be answerable without scrolling.
             item {
-                Card {
+                Card(Modifier.clickable { onOpen("profile") }) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Avatar(state.employeeName.ifBlank { "You" }, size = 54.dp)
+                        Avatar(p.name.ifBlank { state.employeeName.ifBlank { "You" } }, size = 54.dp)
                         Spacer(Modifier.width(14.dp))
                         Column(Modifier.weight(1f)) {
+                            Text(p.name.ifBlank { state.employeeName.ifBlank { "Signed in" } }, style = MaterialTheme.typography.titleLarge)
                             Text(
-                                state.employeeName.ifBlank { "Signed in" },
-                                style = MaterialTheme.typography.titleLarge,
-                            )
-                            Spacer(Modifier.height(2.dp))
-                            Text(
-                                listOfNotNull(
-                                    state.bootstrap?.employeeCode?.ifBlank { null },
-                                    "Field sales",
-                                ).joinToString(" · "),
+                                listOf(p.code, p.designation, p.department).filter { it.isNotBlank() }.joinToString(" · "),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                            p.manager?.let {
+                                Text("Reports to ${it.name}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
-                        if (state.onDuty) {
-                            Chip("on duty", MaterialTheme.colorScheme.primary)
+                        if (caps.field && state.onDuty) Chip("on duty", MaterialTheme.colorScheme.primary)
+                        else Icon(Icons.Default.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+
+            /* ── A manager's queue, when there is one ───────────── */
+            if (caps.manager && state.approvals > 0) {
+                item {
+                    AccentCard(tone = MaterialTheme.colorScheme.error, onClick = { onOpen("approvals") }) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.AutoMirrored.Outlined.FactCheck, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    "${state.approvals} waiting for your approval",
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                                Text(
+                                    "Your team's leave, attendance and overtime",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Icon(Icons.Default.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
             }
 
-            /* ── Am I marked in today ──────────────────────────── */
-
+            /* ── Am I marked in today ────────────────────────────── */
             item {
+                val day = today.data
                 val tone = when {
-                    today == null -> MaterialTheme.colorScheme.onSurfaceVariant
-                    today!!.isPresent -> MaterialTheme.colorScheme.primary
-                    today!!.isAbsent -> MaterialTheme.colorScheme.error
-                    today!!.isOff -> MaterialTheme.colorScheme.secondary
+                    day == null -> MaterialTheme.colorScheme.onSurfaceVariant
+                    day.isPresent -> MaterialTheme.colorScheme.primary
+                    day.isAbsent -> MaterialTheme.colorScheme.error
                     else -> MaterialTheme.colorScheme.secondary
                 }
-
-                Card {
+                Card(Modifier.clickable { onOpen("attendance") }) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            Modifier
-                                .size(12.dp)
-                                .background(tone, RoundedCornerShape(999.dp)),
-                        )
+                        Box(Modifier.size(12.dp).background(tone, RoundedCornerShape(999.dp)))
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
                             Text(
                                 when {
-                                    !loaded -> "Checking today…"
-                                    today == null -> "No attendance record"
-                                    else -> today!!.label.ifBlank { today!!.status }
+                                    today.loading && day == null -> "Checking today…"
+                                    day == null -> "Not marked in yet"
+                                    else -> day.word
                                 },
                                 style = MaterialTheme.typography.titleMedium,
                             )
                             Text(
                                 when {
-                                    today == null && loaded ->
-                                        "Nothing has come from the punch machine for you today."
-                                    today != null && today!!.inTime.isNotBlank() ->
-                                        "In ${today!!.inTime}" +
-                                            (if (today!!.outTime.isNotBlank()) " · Out ${today!!.outTime}" else "") +
-                                            (if (today!!.workDisplay.isNotBlank()) " · ${today!!.workDisplay}" else "")
+                                    today.problem != null && day == null -> today.problem
+                                    day == null ->
+                                        if (caps.fieldAttendance) "Field staff are marked from the duty the app records."
+                                        else "Nothing from the punch machine for you today yet."
+                                    day.inTime.isNotBlank() ->
+                                        "In ${day.inTime}" +
+                                            (if (day.outTime.isNotBlank()) " · Out ${day.outTime}" else "") +
+                                            (if (day.workDisplay.isNotBlank()) " · ${day.workDisplay}" else "")
                                     else -> "Today"
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        if (today?.isLate == true) {
-                            Chip("${today!!.lateMins} min late", MaterialTheme.colorScheme.error)
-                        }
+                        if (day?.isLate == true) Chip("${day.lateMins} min late", MaterialTheme.colorScheme.error)
                     }
                 }
             }
 
-            /* ── Leave left ────────────────────────────────────── */
-
+            /* ── Leave left ──────────────────────────────────────── */
             item {
+                val b = book.data
                 Card {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        SectionLabel("Leave left this year")
-                        Text(
-                            "Apply",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable(onClick = onOpenLeave)
-                                .padding(horizontal = 6.dp),
-                        )
-                    }
-                    Spacer(Modifier.height(12.dp))
+                    SectionHeader("Leave left this year", action = "Apply", onAction = { onOpen("leave") })
+                    Spacer(Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        StatTile(b?.let { trimNumber(it.left("CL")) } ?: "–", "casual", modifier = Modifier.weight(1f))
+                        StatTile(b?.let { trimNumber(it.left("SL")) } ?: "–", "sick", tone = MaterialTheme.colorScheme.secondary, modifier = Modifier.weight(1f))
                         StatTile(
-                            value = trim(balance.casualLeft),
-                            label = "casual",
-                            modifier = Modifier.weight(1f),
-                        )
-                        StatTile(
-                            value = trim(balance.sickLeft),
-                            label = "sick",
-                            tone = MaterialTheme.colorScheme.secondary,
-                            modifier = Modifier.weight(1f),
-                        )
-                        StatTile(
-                            value = if (balance.plEligible) trim(balance.privilegeLeft) else "—",
-                            label = "privilege",
+                            if (b?.plEligible == true) trimNumber(b.left("PL")) else "–",
+                            "privilege",
                             tone = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.weight(1f),
                         )
@@ -243,44 +192,65 @@ fun MeScreen(
                 }
             }
 
-            /* ── How the work works ────────────────────────────── */
-            //
-            // The five sentences a new employee needs on day one. Kept here, on
-            // the screen they already open to check their own numbers, rather
-            // than behind a help menu nobody finds in a field.
+            /* ── Every place, as a page ──────────────────────────── */
             item {
                 Card {
-                    SectionLabel("How this works")
-                    Spacer(Modifier.height(8.dp))
-                    listOf(
-                        "You get two kinds of work: NEW CUSTOMERS (a target, you find the people) and FOLLOW-UPS (a named customer, one visit).",
-                        "When you register someone, you choose which SCHEME they belong to. That decides the steps they go through from then on.",
-                        "A follow-up already knows the customer, the scheme and the step. You only fill the form for that step.",
-                        "Saving a visit sends it to the sales desk for APPROVAL. The step counts as done only when they approve — not when you press save.",
-                        "If a visit is sent back, it shows the desk's reason and a Redo button. Everything works with no signal and is sent when you have some.",
-                    ).forEach { line ->
-                        Row(Modifier.padding(vertical = 4.dp)) {
-                            Text("•  ", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
-                            Text(line, style = MaterialTheme.typography.bodyMedium)
-                        }
+                    SectionLabel("My workday")
+                    MenuRow(Icons.Outlined.CalendarMonth, "Attendance", "Every day this month", { onOpen("attendance") })
+                    MenuRow(Icons.Outlined.EventAvailable, "Leave", "Balance, requests and applying", { onOpen("leave") })
+                    MenuRow(Icons.Outlined.BuildCircle, "Fix attendance", "Ask for a day to be corrected", { onOpen("regularize") })
+                    if (caps.overtime) MenuRow(Icons.Outlined.AccessTime, "Overtime", "Report a late stay", { onOpen("overtime") })
+                    MenuRow(Icons.Outlined.BeachAccess, "Holidays", "This year's company holidays", { onOpen("holidays") }, last = true)
+                }
+            }
+            item {
+                Card {
+                    SectionLabel("Pay and papers")
+                    MenuRow(Icons.Outlined.AccountBalanceWallet, "Payslips", "Every paid month, as a PDF", { onOpen("payslips") })
+                    MenuRow(Icons.Outlined.Description, "Documents", "Letters from HR, and asking for one", { onOpen("documents") }, last = true)
+                }
+            }
+            item {
+                Card {
+                    SectionLabel("More")
+                    if (caps.manager) MenuRow(Icons.AutoMirrored.Outlined.FactCheck, "Approvals", "Your team's requests", { onOpen("approvals") }, badge = state.approvals)
+                    if (caps.standings) MenuRow(Icons.Outlined.EmojiEvents, "Standings", "Ranked by time worked", { onOpen("standings") })
+                    MenuRow(Icons.Outlined.Notifications, "Notifications", "Everything the office has sent you", { onOpen("notifications") }, badge = state.unread)
+                    if (caps.field) {
+                        MenuRow(
+                            Icons.Outlined.CloudUpload,
+                            "Waiting to be sent",
+                            if (state.pendingRecords + state.queuedPings == 0) "Nothing waiting"
+                            else "${state.pendingRecords} visits · ${state.queuedPings} positions",
+                            { onOpen("settings") },
+                            badge = state.rejectedRecords,
+                        )
                     }
+                    MenuRow(Icons.Outlined.Settings, "Settings", "App lock, permissions, sign out", { onOpen("settings") }, last = true)
                 }
             }
 
-            /* ── Everything else ───────────────────────────────── */
-
-            item {
-                Card(Modifier.padding(0.dp)) {
-                    MeRow(Icons.Outlined.CalendarMonth, "Attendance history", "Every day this month", onOpenAttendance)
-                    MeRow(Icons.Outlined.EventAvailable, "Leave", "Balance, applications, and applying", onOpenLeave)
-                    MeRow(
-                        Icons.Outlined.CloudUpload,
-                        "Waiting to be sent",
-                        if (state.pendingRecords + state.queuedPings == 0) "Nothing waiting"
-                        else "${state.pendingRecords} visits · ${state.queuedPings} positions",
-                        onOpenSettings,
-                    )
-                    MeRow(Icons.Outlined.Settings, "Settings", "Sync, sign out, and anything that needs fixing", onOpenSettings, last = true)
+            /* ── How the field work works — field staff only ─────── */
+            // The five sentences a new salesperson needs on day one, on the
+            // screen they already open, rather than behind a help menu.
+            if (caps.field) {
+                item {
+                    Card {
+                        SectionLabel("How field work works")
+                        Spacer(Modifier.height(8.dp))
+                        listOf(
+                            "Start DUTY when you set off and end it when you finish. The app records your route only while you are on duty, and your manager confirms the day as present.",
+                            "You get two kinds of work: NEW CUSTOMERS (a target, you find the people) and FOLLOW-UPS (a named customer, one visit).",
+                            "When you register someone, you choose their SCHEME. That decides the steps they go through from then on.",
+                            "Saving a visit sends it to the sales desk for APPROVAL. A step counts as done only when they approve.",
+                            "Everything works with no signal and is sent when you have some.",
+                        ).forEach { line ->
+                            Row(Modifier.padding(vertical = 4.dp)) {
+                                Text("•  ", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+                                Text(line, style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
+                    }
                 }
             }
 
@@ -288,46 +258,3 @@ fun MeScreen(
         }
     }
 }
-
-@Composable
-private fun MeRow(
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    onClick: () -> Unit,
-    last: Boolean = false,
-) {
-    Column {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onClick)
-                .padding(vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp))
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Icon(Icons.Default.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        if (!last) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(1.dp)
-                    .background(MaterialTheme.colorScheme.outlineVariant),
-            )
-        }
-    }
-}
-
-/** 12.0 reads as an error on a leave balance; 12 reads as a number of days. */
-private fun trim(value: Double): String =
-    if (value == value.toLong().toDouble()) value.toLong().toString() else "%.1f".format(value)

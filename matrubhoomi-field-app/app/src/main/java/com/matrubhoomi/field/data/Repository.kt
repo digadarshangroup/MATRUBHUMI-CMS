@@ -127,7 +127,7 @@ class Repository(private val context: Context) {
             }
         }
 
-        db.enqueueSubmission(clientRef, payload, photoArray)
+        db.enqueueSubmission(clientRef, payload, photoArray, prefs.employeeId)
         SyncScheduler.now(context)
         return clientRef
     }
@@ -141,8 +141,6 @@ class Repository(private val context: Context) {
     fun attendanceMonth(year: Int, month: Int) = api.attendanceMonth(year, month)
     fun leaveBalance() = api.leaveBalance()
     fun leaveApplications() = api.leaveApplications()
-    fun applyLeave(type: String, from: String, to: String, reason: String, halfDay: Boolean) =
-        api.applyLeave(type, from, to, reason, halfDay)
     fun leadDetail(id: String) = api.leadDetail(id)
     fun leads(query: String, mineOnly: Boolean) = api.leads(query, mineOnly)
     fun tasks(scope: String) = api.tasks(scope)
@@ -151,11 +149,76 @@ class Repository(private val context: Context) {
     fun verifyOtp(otpId: String, phone: String, code: String, leadId: String?) =
         api.verifyOtp(otpId, phone, code, leadId)
 
-    /* ── What is still waiting to go ──────────────────────────────── */
+    /* ── Everybody's HR records ───────────────────────────────────── */
+    //
+    // Online-only by design. Leave, corrections and overtime carry rules only
+    // the server can check — balances, caps, windows — and queuing one would
+    // tell somebody they had booked a day the server was always going to
+    // refuse. The screens say so when there is no connection.
 
-    fun pendingCount() = db.pendingCount()
-    fun rejectedCount() = db.rejectedCount()
-    fun queuedPings() = db.pingCount()
+    fun leaveBook() = api.leaveBook()
+    fun myLeaves() = api.myLeaves()
+    fun applyLeave(type: String, from: String, to: String, reason: String, halfDay: Boolean, slot: String? = null) =
+        api.applyLeave(type, from, to, reason, halfDay, slot)
+    fun quickLeave(target: String, halfDay: Boolean, slot: String, reason: String) =
+        api.quickLeave(target, halfDay, slot, reason)
+    fun cancelLeave(id: String, reason: String) = api.cancelLeave(id, reason)
+    fun uploadLeaveDocument(id: String, file: java.io.File, mime: String) = api.uploadLeaveDocument(id, file, mime)
+    fun holidays(year: Int) = api.holidays(year)
+
+    fun myRegularizations() = api.myRegularizations()
+    fun requestRegularization(date: String, type: String, reason: String, inTime: String?, outTime: String?, status: String?) =
+        api.requestRegularization(date, type, reason, inTime, outTime, status)
+    fun cancelRegularization(id: String) = api.cancelRegularization(id)
+
+    fun overtimeDue() = api.overtimeDue()
+    fun myOvertime() = api.myOvertime()
+    fun submitOvertime(date: String, description: String, proof: File?, mime: String = "image/jpeg") =
+        api.submitOvertime(date, description, proof, mime)
+
+    fun payslips() = api.payslips()
+    fun downloadPayslip(month: Int, year: Int): ApiResult<File> =
+        api.downloadPayslip(month, year, File(File(context.cacheDir, "payslips"), "payslip-$year-${month.toString().padStart(2, '0')}.pdf"))
+    fun documents() = api.documents()
+    fun documentTypes() = api.documentTypes()
+    fun requestDocument(type: String, otherLabel: String, reason: String) = api.requestDocument(type, otherLabel, reason)
+    fun documentLink(id: String) = api.documentLink(id)
+    fun cancelDocument(id: String) = api.cancelDocument(id)
+
+    fun standings(period: String) = api.standings(period)
+    fun contactDetails() = api.contactDetails()
+    fun updateContact(alt: String, email: String, blood: String, street: String, city: String, state: String, pin: String) =
+        api.updateContact(alt, email, blood, street, city, state, pin)
+    fun changePassword(current: String, next: String) = api.changePassword(current, next)
+    fun latestRelease() = api.latestRelease()
+
+    fun inbox(limit: Int = 40, since: String? = null) = api.inbox(limit, since)
+    fun markInboxRead(ids: List<String>? = null) = api.markInboxRead(ids)
+
+    /* ── A manager's queues ───────────────────────────────────────── */
+
+    fun approvalsSummary() = api.approvalsSummary()
+    fun teamLeaves() = api.teamLeaves()
+    fun teamWithdrawals() = api.teamWithdrawals()
+    fun approveLeave(id: String, remarks: String) = api.approveLeave(id, remarks)
+    fun rejectLeave(id: String, remarks: String) = api.rejectLeave(id, remarks)
+    fun classifyQuickLeave(id: String, type: String, forceLop: String?) = api.classifyQuickLeave(id, type, forceLop)
+    fun approveWithdrawal(id: String) = api.approveWithdrawal(id)
+    fun rejectWithdrawal(id: String, remarks: String) = api.rejectWithdrawal(id, remarks)
+    fun teamRegularizations() = api.teamRegularizations()
+    fun approveRegularization(id: String, remarks: String) = api.approveRegularization(id, remarks)
+    fun rejectRegularization(id: String, reason: String) = api.rejectRegularization(id, reason)
+    fun teamOvertime() = api.teamOvertime()
+    fun approveOvertime(id: String, remarks: String) = api.approveOvertime(id, remarks)
+    fun rejectOvertime(id: String, remarks: String) = api.rejectOvertime(id, remarks)
+
+    /* ── What is still waiting to go ──────────────────────────────── */
+    //
+    // Counted for the SIGNED-IN employee only — see FieldDb's header.
+
+    fun pendingCount() = db.pendingCount(prefs.employeeId)
+    fun rejectedCount() = db.rejectedCount(prefs.employeeId)
+    fun queuedPings() = db.pingCount(prefs.employeeId)
 
     companion object {
         @Volatile private var instance: Repository? = null

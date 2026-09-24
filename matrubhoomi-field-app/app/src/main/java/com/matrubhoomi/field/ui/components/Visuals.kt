@@ -592,11 +592,10 @@ fun SegmentedTabs(
                         .padding(vertical = 9.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(
+                    FitText(
                         label,
                         style = MaterialTheme.typography.labelLarge,
                         color = ink,
-                        maxLines = 1,
                         textAlign = TextAlign.Center,
                         fontWeight = if (chosen) FontWeight.SemiBold else FontWeight.Normal,
                     )

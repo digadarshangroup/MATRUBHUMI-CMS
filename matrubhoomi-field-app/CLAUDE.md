@@ -4,10 +4,12 @@ Guidance for Claude Code (claude.ai/code) working in this repository.
 
 ## What this is
 
-The Android app for Matrubhoomi's field sales team — Kotlin, Jetpack Compose,
-minSdk 26, no annotation processors. Its backend is
-**`matrubhoomi-hrms-backend`** (`/api/field/*`) and its desk-side counterpart is
-the Sales module in **`matrubhoomi-hrms`**, both normally cloned as sibling
+The Android app for Matrubhoomi's WHOLE workforce — Kotlin, Jetpack Compose,
+minSdk 26, no annotation processors. Everybody uses it for attendance, leave,
+corrections, overtime, payslips, letters and approvals; field SALES staff also
+get assignments, visit forms and the location round. Its backend is
+**`matrubhoomi-hrms-backend`** (`/api/employee/*`, `/api/field/*`) and its
+desk-side counterpart is **`matrubhoomi-hrms`**, both normally cloned as sibling
 folders.
 
 Read `README.md` first — it covers the build, the installation steps a field
@@ -24,10 +26,22 @@ get wrong.
 No tests. Verification is: does it build, does it install, does the trail still
 appear on the desk's map after the phone has been in a pocket for an hour.
 
-## The three things this app exists to do
+## Who sees what is the SERVER's decision
 
-Everything here serves one of them, and a change that makes one of them less
-certain is not an improvement whatever else it does:
+`Bootstrap.capabilities` (field, tracking, fieldAttendance, manager, overtime,
+standings) decides the bottom bar, the menu and whether location is ever asked
+for. Never infer a role from a department name on the handset, and never ask for
+location unless `caps.tracking` — an accountant must never see a location
+prompt. `Prefs.trackingEnabled` defaults to FALSE for the same reason, and
+`Tracking.startDuty` refuses anybody who is not field staff.
+
+**One manager.** Requests go to the reporting manager and their decision is
+final; there is no second approver in the app or on the server.
+
+## The three things the field side exists to do
+
+Everything in the field half serves one of them, and a change that makes one of
+them less certain is not an improvement whatever else it does:
 
 1. Record a visit that **cannot be lost**.
 2. Record a route that **does not stop** when the phone is pocketed.
@@ -83,9 +97,44 @@ the desk's note in `rejectionNote`. Never tell the employee a step is finished
 because they pressed save — the wording on FormScreen and TaskDetailScreen is
 deliberate.
 
-**Build against the SDK on D:.** `ANDROID_HOME` on this machine points at a broken
-mount; `local.properties` (gitignored) carries `sdk.dir=D:/Android/Sdk`. If C:
-is full, build a copy of the tree on D: — the APK does not care where it was built.
+**The server ends sessions; `core/Session.kt` obeys.** A 401, or a 403 with
+`EMPLOYEE_INACTIVE` / `INTERN_NO_APP_ACCESS`, from ANY request (a screen, the sync
+worker, the location batch) stops duty, clears the session and keeps the reason
+for the sign-in screen. `NOT_FIELD_STAFF` keeps the session but stops the
+recording. Do not handle these per screen.
+
+**The outbox is keyed by employee.** Pings, submissions and duty events carry
+`employee_id`; the worker sends only the signed-in person's. Dropping that would
+send one person's queued positions as the next person to sign in on the phone.
+
+**Map tiles are OpenStreetMap (streets) and Esri (satellite), drawn at 512px.**
+Carto's keyless tiles now come back blurred and stamped "API KEY REQUIRED". The
+256px images are drawn at twice their size (`TILE_SIZE` in TileMap.kt) so street
+names stay readable on a dense screen; `metresPerPixel` accounts for it.
+
+**Screens that warn about a permission read `UiState.permissionsVersion`.**
+Android announces nothing when a permission changes; the version is bumped when
+the system dialog closes and on every resume, and a warning that does not read it
+stays on screen after the tap that fixed it.
+
+**The SDK is the default one.** `ANDROID_HOME` points at
+`C:/Users/soumy/AppData/Local/Android/Sdk` and no `local.properties` is needed.
+(An older note here sent builds to an SDK on D:, which no longer exists.)
+
+## Dialogs, toasts, and what the server is told
+
+**Every dialog is `AppDialog`** (`ui/components/Dialogs.kt`) — confirmations,
+reasons, forms. Do not add a bare `AlertDialog`: the look, the busy state and
+the in-dialog refusal are the point. `ReasonDialog(submit = …)` runs the write
+itself and stays open on a refusal. Say a result with `LocalToast.current`.
+
+**A 401 ends the session everywhere** (`core/Session.kt`), so a server route
+the app calls must never answer a user's typo with one. Change-password
+answers a wrong current password with 400 `WRONG_PASSWORD` for this reason.
+
+**`X-App-Version` / `X-App-Build` go on every request** (`Api.builder`). HR's
+Mobile app page and the update prompt depend on them; bump `versionCode` for
+every build handed out, or the phones cannot be told apart.
 
 ## Colour and type
 
@@ -102,11 +151,18 @@ alongside a company web app.
 
 ## Backend coupling
 
-`data/Api.kt` is the only file that knows a server exists. The endpoints it uses
-are all under `/api/field/*` and are documented at the top of
+`data/Api.kt` is the only file that knows a server exists. Field endpoints are
+under `/api/field/*` and are documented at the top of
 `routes/Field_Routes/fieldApp.js` in the backend repo — including WHY that
 router returns the whole working set in one `/bootstrap` call rather than in
-several smaller ones.
+several smaller ones. HR endpoints are the employee portal's own
+(`/api/employee/*`) — the same rolls and records, never a copy. Notifications
+come from the server's inbox (`/api/employee/notifications`), polled by
+`sync/InboxWorker.kt`, because the server's push is Expo-only.
+
+`scripts/employeeAppFlow_test.js` in the backend repo runs this app's whole life
+against a scratch database — sign-in, capabilities, a recorded day, field
+attendance, one-manager approvals, the inbox, and HR letting somebody go.
 
 Sign-in uses the EMPLOYEE credentials the portal already issues
 (`/api/employee/auth/login`). There is one workforce and one password; do not add

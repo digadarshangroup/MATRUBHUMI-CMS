@@ -3,10 +3,11 @@ package com.matrubhoomi.field
 import android.app.Application
 import com.matrubhoomi.field.core.Prefs
 import com.matrubhoomi.field.location.Tracking
+import com.matrubhoomi.field.sync.InboxWorker
 import com.matrubhoomi.field.sync.SyncScheduler
 
 /**
- * Two things at process start, and nothing else.
+ * Three things at process start, and nothing else.
  *
  * Both are IDEMPOTENT, which is what makes them safe here: this runs on every
  * cold start, and on some handsets that includes a start caused by the very
@@ -21,6 +22,11 @@ class FieldApp : Application() {
         // The net under the outbox. Enqueued as unique periodic work with a
         // KEEP policy, so twenty cold starts do not produce twenty schedules.
         SyncScheduler.schedulePeriodic(this)
+
+        // The inbox check — how leave decisions and approvals reach the phone,
+        // since the server's push cannot. Unique work with KEEP, like the one
+        // above; only while somebody is signed in.
+        if (Prefs.get(this).isSignedIn) InboxWorker.schedule(this)
 
         // If duty was on when the process died — a reboot, a low-memory kill, a
         // manufacturer's cleaner — the recording has to come back. But NOT by

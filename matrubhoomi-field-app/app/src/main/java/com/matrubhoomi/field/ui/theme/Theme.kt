@@ -202,6 +202,9 @@ fun FieldTheme(darkTheme: Boolean = false, content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = if (darkTheme) DarkColours else LightColours,
         typography = FieldTypography,
-        content = content,
-    )
+    ) {
+        // See ui/components/Fit.kt: this type is already a step larger than
+        // Android's, so the system scale is followed only up to a point.
+        com.matrubhoomi.field.ui.components.CappedFontScale(content)
+    }
 }

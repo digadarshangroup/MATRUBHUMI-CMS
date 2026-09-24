@@ -50,8 +50,33 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
 
         val api = Api.get(applicationContext)
         val db = FieldDb.get(applicationContext)
+        // Everything below is scoped to whoever is signed in NOW — rows another
+        // employee recorded on this handset wait for them (see FieldDb).
+        val me = prefs.employeeId
 
         var mustRetry = false
+
+        /* ── Duty switched on and off ────────────────────────────── */
+
+        // First, so the office knows a duty began before the fixes of it
+        // arrive, and so ending duty files the day's attendance as soon as
+        // there is signal. An Unauthorised here has already signed the app
+        // out (core/Session.kt), which also stopped the recording.
+        while (true) {
+            val (ids, events) = db.takeDutyEvents(me)
+            if (ids.isEmpty()) break
+            when (val result = api.sendDutyEvents(events)) {
+                is ApiResult.Ok -> db.deleteEvents(ids)
+                is ApiResult.Offline -> { mustRetry = true; break }
+                is ApiResult.Unauthorised -> return@withContext Result.success()
+                is ApiResult.Failed -> {
+                    // Refused outright — moved out of Sales, a malformed event.
+                    // Kept, it would block every later event forever.
+                    if (result.permanent) db.deleteEvents(ids) else mustRetry = true
+                    break
+                }
+            }
+        }
 
         /* ── The trail ───────────────────────────────────────────── */
 
@@ -60,7 +85,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         // likely to fail. Successive runs drain the rest.
         var batches = 0
         while (batches < MAX_BATCHES_PER_RUN) {
-            val (ids, pings) = db.takePings(prefs.batchSize)
+            val (ids, pings) = db.takePings(me, prefs.batchSize)
             if (ids.isEmpty()) break
 
             when (val result = api.sendPings(pings, UUID.randomUUID().toString())) {
@@ -87,7 +112,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
 
         /* ── The records ─────────────────────────────────────────── */
 
-        for (queued in db.pendingSubmissions()) {
+        for (queued in db.pendingSubmissions(me)) {
             // Photos first. Each one that succeeds is written back immediately,
             // so a retry after three of four uploaded does not re-send the
             // three that already landed.

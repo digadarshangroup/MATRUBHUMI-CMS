@@ -44,6 +44,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.material.icons.outlined.Sms
+import androidx.compose.foundation.border
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -270,10 +273,7 @@ fun FormScreen(
                 Card {
                     SectionLabel("What happened")
                     Spacer(Modifier.height(10.dp))
-                    Row(
-                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
+                    com.matrubhoomi.field.ui.components.ChipFlow {
                         OUTCOMES.forEach { (id, label) ->
                             FilterChip(
                                 selected = outcome == id,
@@ -562,7 +562,7 @@ private fun FieldEditor(
                 }
             }
 
-            "rating" -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            "rating" -> com.matrubhoomi.field.ui.components.ChipFlow {
                 val current = (value as? String)?.toIntOrNull() ?: (value as? Int) ?: 0
                 (1..5).forEach { n ->
                     FilterChip(
@@ -706,60 +706,92 @@ private fun OtpDialog(
         busy = false
     }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Verify $phone") },
-        text = {
-            Column {
-                if (busy) {
-                    CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
-                    Spacer(Modifier.height(10.dp))
+    fun verify() {
+        if (busy || code.length != 4 || otpId == null) return
+        busy = true
+        message = null
+        scope.launch {
+            when (val result = withContext(Dispatchers.IO) { repo.verifyOtp(otpId!!, phone, code, leadId) }) {
+                is ApiResult.Ok -> onVerified(otpId!!)
+                is ApiResult.Offline -> message = "No signal — the code cannot be checked from here."
+                is ApiResult.Unauthorised -> message = "Your session expired."
+                is ApiResult.Failed -> message = result.message
+            }
+            busy = false
+        }
+    }
+
+    com.matrubhoomi.field.ui.components.AppDialog(
+        title = "Verify the customer",
+        message = "A code was sent to $phone. Ask for the four digits they received.",
+        icon = androidx.compose.material.icons.Icons.Outlined.Sms,
+        tone = com.matrubhoomi.field.ui.components.Tone.Positive,
+        confirmLabel = "Verify",
+        confirmEnabled = code.length == 4 && otpId != null,
+        busy = busy,
+        error = message,
+        onDismiss = onDismiss,
+        onConfirm = { verify() },
+    ) {
+        manualCode?.let {
+            Notice(
+                title = "Read this code out: $it",
+                body = "No SMS could be delivered, so the customer has not received it. " +
+                    "Read it to them and have them tell it back — the record will show it was verified this way.",
+            )
+            Spacer(Modifier.height(12.dp))
+        }
+        OtpBoxes(code = code, onChange = { code = it; message = null }, onComplete = { verify() })
+        if (otpId == null && busy) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "Sending the code…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+            )
+        }
+    }
+}
+
+/**
+ * Four digit boxes over one hidden text field — the shape an OTP has on every
+ * other app the customer and the employee use, and it shows a missing digit at
+ * a glance. The keyboard is the number pad; the fourth digit verifies.
+ */
+@Composable
+private fun OtpBoxes(code: String, onChange: (String) -> Unit, onComplete: () -> Unit) {
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    androidx.compose.foundation.text.BasicTextField(
+        value = code,
+        onValueChange = { v ->
+            val digits = v.filter(Char::isDigit).take(4)
+            onChange(digits)
+            if (digits.length == 4) onComplete()
+        },
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+        modifier = Modifier.fillMaxWidth().focusRequester(focus),
+        decorationBox = {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally)) {
+                repeat(4) { i ->
+                    val ch = code.getOrNull(i)?.toString().orEmpty()
+                    val active = i == code.length
+                    androidx.compose.foundation.layout.Box(
+                        Modifier
+                            .size(width = 54.dp, height = 60.dp)
+                            .border(
+                                width = if (active) 2.dp else 1.dp,
+                                color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                                shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(ch, style = MaterialTheme.typography.headlineSmall)
+                    }
                 }
-                message?.let {
-                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
-                    Spacer(Modifier.height(10.dp))
-                }
-                manualCode?.let {
-                    Notice(
-                        title = "Read this code out: $it",
-                        body = "No SMS could be delivered, so the customer has not received it. " +
-                            "Read it to them and have them tell it back — the record will show it was verified this way.",
-                    )
-                    Spacer(Modifier.height(10.dp))
-                }
-                Text(
-                    "Ask the customer for the four digits they received.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = code,
-                    onValueChange = { if (it.length <= 4) code = it.filter(Char::isDigit) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                    modifier = Modifier.fillMaxWidth(),
-                )
             }
         },
-        confirmButton = {
-            TextButton(
-                enabled = !busy && code.length == 4 && otpId != null,
-                onClick = {
-                    busy = true
-                    message = null
-                    scope.launch {
-                        when (val result = withContext(Dispatchers.IO) { repo.verifyOtp(otpId!!, phone, code, leadId) }) {
-                            is ApiResult.Ok -> onVerified(otpId!!)
-                            is ApiResult.Offline -> message = "No signal — the code cannot be checked from here."
-                            is ApiResult.Unauthorised -> message = "Your session expired."
-                            is ApiResult.Failed -> message = result.message
-                        }
-                        busy = false
-                    }
-                },
-            ) { Text("Verify") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 

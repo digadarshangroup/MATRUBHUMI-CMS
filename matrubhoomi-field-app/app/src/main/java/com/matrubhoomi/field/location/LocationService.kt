@@ -79,6 +79,34 @@ class LocationService : Service() {
     private var fixCount = 0
     private var metresThisSession = 0.0
 
+    /** When a fix was last RECORDED, and when the provider last called at all. */
+    private var lastRecordedAt = 0L
+    private var lastCallbackAt = 0L
+    private var heartbeatInFlight = false
+    private var locationSwitchOff = false
+
+    /**
+     * The tick that keeps a still phone visible and a stalled provider alive.
+     *
+     * THE HEARTBEAT. The provider reports only once the phone has moved
+     * `minDistanceMeters`, so a salesperson sitting with a farmer for forty
+     * minutes produced NO fixes — and the office saw a gap, not a visit. Every
+     * `heartbeatSeconds` without a recorded fix, one fresh fix is asked for and
+     * recorded as a heartbeat. That is what lets the server say "stayed in
+     * Kalmeshwar 45 minutes". (CallTrack did the same every five minutes.)
+     *
+     * THE WATCHDOG. On some OEM builds the fused provider silently stops calling
+     * back while the service lives on. No callback for three intervals and the
+     * request is made again from scratch.
+     */
+    private val ticker = android.os.Handler(android.os.Looper.getMainLooper())
+    private val tick = object : Runnable {
+        override fun run() {
+            onTick()
+            ticker.postDelayed(this, TICK_MS)
+        }
+    }
+
     private enum class Mode { ACTIVE, IDLE }
 
     override fun onCreate() {
@@ -88,6 +116,9 @@ class LocationService : Service() {
         client = LocationServices.getFusedLocationProviderClient(this)
         createChannel()
         registerReceiver(stopReceiver, IntentFilter(ACTION_STOP), exportFlags())
+        registerReceiver(reshowReceiver, IntentFilter(ACTION_RESHOW), exportFlags())
+        // The location switch, the moment it changes — not up to a tick later.
+        registerReceiver(switchReceiver, IntentFilter(android.location.LocationManager.PROVIDERS_CHANGED_ACTION), exportFlags())
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -101,13 +132,20 @@ class LocationService : Service() {
             return START_NOT_STICKY
         }
 
-        if (!prefs.onDuty || !prefs.trackingEnabled) {
+        // Field staff only, and only while the server allows recording — read
+        // from Prefs, which the last bootstrap set from the server's decision.
+        if (!prefs.onDuty || !prefs.trackingEnabled || !prefs.isFieldStaff) {
             stopSelf()
             return START_NOT_STICKY
         }
 
         acquireWakeLock()
-        requestUpdates(Mode.ACTIVE)
+        // A second start is a reconfiguration, not a restart: the fix stream
+        // and the tick carry on rather than being torn down and rebuilt.
+        if (callback == null) requestUpdates(Mode.ACTIVE)
+        ticker.removeCallbacks(tick)
+        ticker.postDelayed(tick, TICK_MS)
+        onLocationSwitch()
 
         // START_STICKY: if the system kills this for memory, it recreates it
         // with a null intent — which is why every piece of state above is read
@@ -139,17 +177,21 @@ class LocationService : Service() {
             .setWaitForAccurateLocation(false)
             // A ceiling on how long the provider may batch fixes before
             // delivering them. Fixes carry their own timestamps, so batching
-            // costs nothing in accuracy and saves a wake-up per fix.
-            .setMaxUpdateDelayMillis(intervalSeconds * 3000L)
+            // costs nothing in accuracy and saves a wake-up per fix — but every
+            // second held here is a second the desk's live board is behind, so
+            // two intervals, not three.
+            .setMaxUpdateDelayMillis(intervalSeconds * 2000L)
             .build()
 
         callback?.let { client.removeLocationUpdates(it) }
 
         val cb = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
+                lastCallbackAt = System.currentTimeMillis()
                 result.locations.forEach { record(it) }
             }
         }
+        lastCallbackAt = System.currentTimeMillis()
         callback = cb
         currentMode = mode
 
@@ -163,8 +205,68 @@ class LocationService : Service() {
         }
     }
 
-    private fun record(location: Location) {
+    /** One tick: the heartbeat, the watchdog, the midnight rule and the location switch. */
+    private fun onTick() {
+        if (!prefs.onDuty) { stopSelf(); return }
+        if (Tracking.endDutyIfDayChanged(this)) return
+
+        val now = System.currentTimeMillis()
+
+        // The phone's own location switch. With it off the provider delivers
+        // nothing and says nothing; the notification says it instead.
+        onLocationSwitch()
+        if (locationSwitchOff) return
+
+        // A new reading from the server arrives with an upload, not with a fix,
+        // and a phone standing still records one only every couple of minutes.
+        // Without this the notification said "Moving · 54 km/h" for minutes
+        // after the salesperson had pulled up.
+        if (prefs.nowLine != shownNowLine || prefs.serverDayKm != shownServerKm) {
+            lastNotificationAt = 0L
+            updateNotification()
+        }
+
+        val heartbeatMs = prefs.heartbeatSeconds * 1000L
+        if (!heartbeatInFlight && now - lastRecordedAt >= heartbeatMs) requestHeartbeat()
+
+        val interval = (if (currentMode == Mode.IDLE) prefs.idleIntervalSeconds else prefs.pingIntervalSeconds) * 1000L
+        if (now - lastCallbackAt > maxOf(interval * 3, WATCHDOG_MIN_MS) && now - lastRecordedAt > WATCHDOG_MIN_MS) {
+            android.util.Log.w("LocationService", "No location callback for a while — requesting updates again")
+            requestUpdates(currentMode)
+        }
+    }
+
+    /** One fresh fix for a phone that has not moved — see the note on `ticker`. */
+    private fun requestHeartbeat() {
+        heartbeatInFlight = true
+        try {
+            val request = com.google.android.gms.location.CurrentLocationRequest.Builder()
+                .setPriority(Priority.PRIORITY_HIGH_ACCURACY)
+                // A fix up to a minute old is still "where the phone is" for a
+                // phone that has not moved; asking for a brand new one would
+                // wake the GPS for nothing.
+                .setMaxUpdateAgeMillis(60_000)
+                .setDurationMillis(30_000)
+                .build()
+            client.getCurrentLocation(request, null)
+                .addOnSuccessListener { location ->
+                    heartbeatInFlight = false
+                    // Nothing came back: nothing is recorded. A heartbeat is
+                    // evidence, never an invention.
+                    if (location != null && location.time > lastRecordedFixTime) record(location, source = "heartbeat")
+                }
+                .addOnFailureListener { heartbeatInFlight = false }
+        } catch (e: SecurityException) {
+            heartbeatInFlight = false
+        }
+    }
+
+    private var lastRecordedFixTime = 0L
+
+    private fun record(location: Location, source: String = "service") {
         fixCount++
+        lastRecordedAt = System.currentTimeMillis()
+        lastRecordedFixTime = maxOf(lastRecordedFixTime, location.time)
 
         val moved = lastFix?.distanceTo(location) ?: 0f
         val accuracy = if (location.hasAccuracy()) location.accuracy else 0f
@@ -199,6 +301,9 @@ class LocationService : Service() {
             isCharging = isCharging(),
             isMoving = isMoving,
             activity = if (isMoving) inferActivity(location) else "still",
+            // Whose fix this is — see FieldDb's header on why it is recorded.
+            employeeId = prefs.employeeId,
+            source = source,
         )
 
         pingsSinceUpload++
@@ -226,7 +331,7 @@ class LocationService : Service() {
 
     private fun maybeUpload() {
         val dueByCount = pingsSinceUpload >= prefs.batchSize
-        val dueByTime = System.currentTimeMillis() - lastUploadAt > UPLOAD_EVERY_MS
+        val dueByTime = System.currentTimeMillis() - lastUploadAt > prefs.uploadEverySeconds * 1000L
         if (!dueByCount && !dueByTime) return
 
         pingsSinceUpload = 0
@@ -262,8 +367,16 @@ class LocationService : Service() {
             setShowBadge(false)
             enableVibration(false)
         }
-        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
-            .createNotificationChannel(channel)
+        val alerts = NotificationChannel(
+            ALERT_CHANNEL_ID,
+            "Recording problems",
+            // HIGH: this one must interrupt — see onLocationSwitch().
+            NotificationManager.IMPORTANCE_HIGH,
+        ).apply { description = "When something stops your round being recorded, such as location being switched off." }
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).apply {
+            createNotificationChannel(channel)
+            createNotificationChannel(alerts)
+        }
     }
 
     private fun buildNotification(): Notification {
@@ -273,24 +386,49 @@ class LocationService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-        val km = String.format(java.util.Locale.US, "%.1f", metresThisSession / 1000.0)
-        val queued = db.pingCount()
+        // The server's count for today when it has sent one (see
+        // Prefs.serverDayKm); this session's own count only until then.
+        val serverKm = prefs.serverDayKm.split('|')
+            .takeIf { it.size == 2 && it[0] == java.time.LocalDate.now().toString() }
+            ?.get(1)?.toDoubleOrNull()
+        val km = String.format(java.util.Locale.US, "%.1f", serverKm ?: (metresThisSession / 1000.0))
+        val queued = db.pingCount(prefs.employeeId)
+
+        // The office's own reading when it has one — "At Kalmeshwar · 25 min" —
+        // so the phone and the desk say the same thing about where somebody is.
+        val now = prefs.nowLine
+        shownNowLine = now
+        shownServerKm = prefs.serverDayKm
+        val text = when {
+            locationSwitchOff -> "Location is OFF — turn it on, or your round is not recorded."
+            now.isNotBlank() -> "$now · $km km today"
+            else -> buildString {
+                append("$km km today")
+                if (currentMode == Mode.IDLE) append(" · still")
+            }
+        }
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
-            .setContentTitle("On duty — recording your round")
-            .setContentText(
-                buildString {
-                    append("$km km today")
-                    if (currentMode == Mode.IDLE) append(" · paused while still")
-                    if (queued > 0) append(" · $queued waiting to send")
-                },
-            )
+            .setContentTitle(if (locationSwitchOff) "On duty — location is off" else "On duty — recording your round")
+            .setContentText(if (queued > 0 && !locationSwitchOff) "$text · $queued to send" else text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(if (queued > 0 && !locationSwitchOff) "$text · $queued to send" else text))
             .setContentIntent(open)
             // Ongoing and non-dismissible. This is the honest signal that
             // location is being recorded — the user should be able to see it at
             // any moment, and should never be able to hide it while it runs.
+            //
+            // setOngoing alone no longer guarantees that: from Android 14 a
+            // foreground service's notification CAN be swiped away (the service
+            // keeps running, invisibly). So a swipe is answered by putting it
+            // straight back — see reshowReceiver.
             .setOngoing(true)
+            .setDeleteIntent(
+                PendingIntent.getBroadcast(
+                    this, 2, Intent(ACTION_RESHOW).setPackage(packageName),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                ),
+            )
             .setSilent(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
@@ -328,6 +466,9 @@ class LocationService : Service() {
     }
 
     private var lastNotificationAt = 0L
+    /** What the notification last said, so a new reading from the server shows promptly. */
+    private var shownNowLine = ""
+    private var shownServerKm = ""
 
     /* ── Battery ──────────────────────────────────────────────────── */
 
@@ -354,6 +495,61 @@ class LocationService : Service() {
         }
     }
 
+    /* ── Keeping it visible, and saying when location goes off ──────── */
+
+    private val reshowReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            // Swiped away while on duty: it comes straight back. Off duty the
+            // service is stopping anyway and there is nothing to show.
+            if (!prefs.onDuty) return
+            lastNotificationAt = 0L
+            updateNotification()
+        }
+    }
+
+    private val switchReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) = onLocationSwitch()
+    }
+
+    /**
+     * The phone's location switch. Off, the provider delivers nothing and says
+     * nothing — so the on-duty notice says so, and a separate ALERT (sound,
+     * heads-up) tells the employee at once: a day recorded with location off is
+     * an empty route, and they would only find out in the evening.
+     */
+    private fun onLocationSwitch() {
+        val off = !Tracking.isLocationSwitchOn(this)
+        if (off == locationSwitchOff) return
+        locationSwitchOff = off
+        lastNotificationAt = 0L
+        updateNotification()
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (!off) {
+            manager.cancel(ALERT_ID)
+            return
+        }
+        val turnOn = PendingIntent.getActivity(
+            this, 3,
+            Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        runCatching {
+            manager.notify(
+                ALERT_ID,
+                NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
+                    .setSmallIcon(android.R.drawable.stat_notify_error)
+                    .setContentTitle("Location turned off")
+                    .setContentText("You are on duty, but your round is not being recorded. Tap to turn location on.")
+                    .setStyle(NotificationCompat.BigTextStyle().bigText("You are on duty, but your round is not being recorded. Tap to turn location on."))
+                    .setContentIntent(turnOn)
+                    .setAutoCancel(true)
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setCategory(NotificationCompat.CATEGORY_ERROR)
+                    .build(),
+            )
+        }
+    }
+
     /* ── Ending ───────────────────────────────────────────────────── */
 
     private val stopReceiver = object : BroadcastReceiver() {
@@ -361,7 +557,7 @@ class LocationService : Service() {
             // The notification's own "End duty" action. It clears the flag as
             // well as stopping the service — otherwise the heartbeat would
             // faithfully restart what the user just switched off.
-            Tracking.stopDuty(context)
+            Tracking.stopDuty(context, Tracking.StopReason.Notification)
         }
     }
 
@@ -377,9 +573,14 @@ class LocationService : Service() {
     }
 
     override fun onDestroy() {
+        ticker.removeCallbacks(tick)
         callback?.let { runCatching { client.removeLocationUpdates(it) } }
         callback = null
         runCatching { unregisterReceiver(stopReceiver) }
+        runCatching { unregisterReceiver(reshowReceiver) }
+        runCatching { unregisterReceiver(switchReceiver) }
+        // Off duty, a "location is off" alert is no longer anybody's problem.
+        runCatching { (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(ALERT_ID) }
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
 
@@ -397,9 +598,12 @@ class LocationService : Service() {
     companion object {
         const val ACTION_START = "com.matrubhoomi.field.START_TRACKING"
         const val ACTION_STOP = "com.matrubhoomi.field.STOP_TRACKING"
+        private const val ACTION_RESHOW = "com.matrubhoomi.field.RESHOW_DUTY_NOTICE"
 
         private const val CHANNEL_ID = "duty"
         private const val NOTIFICATION_ID = 4201
+        private const val ALERT_CHANNEL_ID = "duty_alerts"
+        private const val ALERT_ID = 4202
 
         // Mirrors services/fieldTracking.js. See the note in record().
         private const val JITTER_FACTOR = 2.0f
@@ -408,6 +612,9 @@ class LocationService : Service() {
         private const val STILL_SPEED = 0.35f
         private const val MOVING_SPEED = 0.6f  // m/s — a slow walk
         private const val IDLE_AFTER_MS = 5 * 60 * 1000L
-        private const val UPLOAD_EVERY_MS = 2 * 60 * 1000L
+        /** How often the heartbeat / watchdog / midnight check runs. */
+        private const val TICK_MS = 30 * 1000L
+        /** No callback for at least this long before the watchdog re-requests. */
+        private const val WATCHDOG_MIN_MS = 3 * 60 * 1000L
     }
 }

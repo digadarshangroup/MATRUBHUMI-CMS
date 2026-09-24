@@ -10,7 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Assignment
+import androidx.compose.material.icons.automirrored.outlined.Assignment
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -87,7 +87,8 @@ fun WorkScreen(vm: AppViewModel, onOpenTask: (String) -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Work", style = MaterialTheme.typography.titleLarge) },
+                title = { Text("Assignments", style = MaterialTheme.typography.titleLarge) },
+                navigationIcon = { com.matrubhoomi.field.ui.components.NavIcon() },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
                 ),
@@ -131,7 +132,7 @@ fun WorkScreen(vm: AppViewModel, onOpenTask: (String) -> Unit) {
 
                 shown.isEmpty() -> Card {
                     EmptyState(
-                        icon = Icons.Outlined.Assignment,
+                        icon = Icons.AutoMirrored.Outlined.Assignment,
                         title = if (showDone) "Nothing finished yet" else "Nothing to do",
                         body = if (showDone)
                             "Work you complete moves here, so you can show what was done and when."

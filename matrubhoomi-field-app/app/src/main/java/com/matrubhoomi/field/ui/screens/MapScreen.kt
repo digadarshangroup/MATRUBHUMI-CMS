@@ -1,28 +1,18 @@
 package com.matrubhoomi.field.ui.screens
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -34,32 +24,28 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.matrubhoomi.field.core.formatKm
 import com.matrubhoomi.field.data.ApiResult
 import com.matrubhoomi.field.data.MyDay
 import com.matrubhoomi.field.data.Repository
 import com.matrubhoomi.field.ui.AppViewModel
 import com.matrubhoomi.field.ui.components.MapPoint
+import com.matrubhoomi.field.ui.components.ScreenBar
 import com.matrubhoomi.field.ui.components.TileMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /**
- * The day's route, with the whole screen to itself.
+ * The day's route with the whole screen to itself — numbered stops, visits,
+ * and where the phone is now, over streets or satellite.
  *
- * WHY THIS EXISTS SEPARATELY FROM THE CARD ON `Route`
- * ---------------------------------------------------
- * A map inside a scrolling page is a keyhole in two ways: it is 300dp tall, and
- * every drag on it is a drag the page also wants. The gesture competition is
- * settled properly now (see TileMap's own note), but the keyhole is not — a
- * route across three villages is simply not readable in a third of a screen.
- *
- * Here there is no parent to compete with and nothing else on screen, so the
- * map behaves the way a map is expected to: drag anywhere, pinch anywhere.
+ * A map inside a scrolling page is a keyhole, and every drag on it is one the
+ * page also wants. Here there is no parent to compete with, so the map behaves
+ * the way a map is expected to: drag anywhere, pinch anywhere.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MapScreen(vm: AppViewModel, onBack: () -> Unit) {
+fun MapScreen(vm: AppViewModel) {
     val context = LocalContext.current
     val repo = remember { Repository.get(context) }
     val state by vm.state.collectAsState()
@@ -84,46 +70,44 @@ fun MapScreen(vm: AppViewModel, onBack: () -> Unit) {
         }
     }
 
+    val d = day
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text("Your route", style = MaterialTheme.typography.titleLarge)
-                        Text(
-                            if (day == null) "Loading…"
-                            else "${day!!.distanceKm} km · ${day!!.path.size} points",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ),
+            ScreenBar(
+                "My route",
+                if (d == null) "Loading…" else "${formatKm(d.distanceKm)} · ${d.stops.count { it.isStay }} stops",
             )
         },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             if (loading) {
-                CircularProgressIndicator(
-                    Modifier.align(Alignment.Center).height(28.dp),
-                    strokeWidth = 2.dp,
-                )
+                CircularProgressIndicator(Modifier.align(Alignment.Center).height(28.dp), strokeWidth = 2.dp)
             } else {
                 TileMap(
-                    path = day?.path.orEmpty().map { MapPoint(it.lat, it.lng) },
+                    path = d?.path.orEmpty().map { MapPoint(it.lat, it.lng) },
+                    markers = d?.let { routeMarkers(it, state.onDuty) }.orEmpty(),
                     modifier = Modifier.fillMaxSize(),
-                    emptyMessage = if (state.onDuty)
-                        "Nothing recorded yet. The line appears once you have moved."
-                    else
-                        "Turn on duty from Today and your round is recorded from then on.",
+                    emptyMessage = if (state.onDuty) "Nothing recorded yet. The line appears once you have moved."
+                    else "Start duty from Today and your round is recorded from then on.",
                 )
+                // What is happening now, over the bottom of the map — the one
+                // line somebody opening this screen is looking for.
+                val words = nowWords(d, state.onDuty)
+                Surface(
+                    modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 36.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
+                    shadowElevation = 3.dp,
+                ) {
+                    Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                        Text(words.headline, style = MaterialTheme.typography.titleMedium)
+                        if (words.detail.isNotBlank()) {
+                            Text(words.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        MapKey()
+                    }
+                }
             }
         }
     }

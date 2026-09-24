@@ -22,6 +22,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,8 +63,18 @@ fun DutyBar(
     onEnd: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val minutes = if (startedAt > 0) ((System.currentTimeMillis() - startedAt) / 60000).toInt() else 0
-    val stale = minutesSince(lastPingAt)?.let { it > 15 } ?: false
+    // Its own clock. Read once at composition, the elapsed time only moved when
+    // something ELSE on screen changed — and it sat at "5m" beside a panel
+    // saying seven.
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(20_000)
+            now = System.currentTimeMillis()
+        }
+    }
+    val minutes = if (startedAt > 0) ((now - startedAt) / 60000).toInt() else 0
+    val stale = minutesSince(lastPingAt, now)?.let { it > 15 } ?: false
 
     val pulse by rememberInfiniteTransition(label = "duty").animateFloat(
         initialValue = 1f,
@@ -127,12 +141,12 @@ private fun duration(minutes: Int): String = when {
     else -> "${minutes / 60}h ${minutes % 60}m"
 }
 
-private fun minutesSince(iso: String): Int? {
+private fun minutesSince(iso: String, now: Long = System.currentTimeMillis()): Int? {
     if (iso.isBlank()) return null
     val at = runCatching {
         val f = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
         f.timeZone = java.util.TimeZone.getTimeZone("UTC")
         f.parse(iso.take(19))?.time
     }.getOrNull() ?: return null
-    return ((System.currentTimeMillis() - at) / 60000).toInt()
+    return ((now - at) / 60000).toInt()
 }

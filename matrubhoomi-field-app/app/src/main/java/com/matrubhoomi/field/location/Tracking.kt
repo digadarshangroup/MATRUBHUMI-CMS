@@ -50,28 +50,98 @@ object Tracking {
     private const val ALARM_REQUEST = 8801
     private const val HEARTBEAT_MINUTES = 5L
 
+    /** Why duty ended — decides whether the office is told, and what the notification says. */
+    enum class StopReason { User, Notification, Midnight, SignedOut, RoleChanged }
+
     /* ── Duty ─────────────────────────────────────────────────────── */
 
-    fun startDuty(context: Context) {
+    /**
+     * Start the day's recording.
+     *
+     * ONLY FOR FIELD STAFF, whatever calls it. `trackingEnabled` is set from
+     * the server's capabilities on every bootstrap and is false for everybody
+     * outside Sales — so a stale button, a stale notification or a restored
+     * screen can never start a location service on an accountant's phone.
+     *
+     * @return false when this person may not record at all.
+     */
+    fun startDuty(context: Context): Boolean {
         val prefs = Prefs.get(context)
+        if (!prefs.trackingEnabled || !prefs.isFieldStaff) return false
+        val now = System.currentTimeMillis()
         prefs.onDuty = true
-        if (prefs.dutyStartedAt == 0L) prefs.dutyStartedAt = System.currentTimeMillis()
+        if (prefs.dutyStartedAt == 0L) prefs.dutyStartedAt = now
+        prefs.nowLine = ""
+        // What happened when the LAST duty ended is not news once a new one is
+        // running; the next end says what happened to the whole day.
+        prefs.attendanceNote = ""
+
+        // The office is TOLD, through the outbox like everything else: without
+        // it the desk cannot tell "ended the day at six" from "phone died at
+        // six", and ending duty is what files the day's field attendance.
+        com.matrubhoomi.field.data.FieldDb.get(context)
+            .enqueueDutyEvent("on", now, java.util.UUID.randomUUID().toString(), null, null, prefs.employeeId)
 
         ensure(context)
         scheduleHeartbeat(context)
         SyncScheduler.schedulePeriodic(context)
+        SyncScheduler.now(context)
+        return true
     }
 
-    fun stopDuty(context: Context) {
+    /**
+     * @param at  when duty ended — now, or the last moment of the day for a
+     *            duty that ran past midnight.
+     */
+    fun stopDuty(context: Context, reason: StopReason = StopReason.User, at: Long = System.currentTimeMillis()) {
         val prefs = Prefs.get(context)
+        val wasOn = prefs.onDuty
         prefs.onDuty = false
         prefs.dutyStartedAt = 0L
+        prefs.nowLine = ""
+
+        // A signed-out session cannot deliver anything, so nothing is queued
+        // for it; every other ending is reported so the day closes properly.
+        if (wasOn && reason != StopReason.SignedOut) {
+            com.matrubhoomi.field.data.FieldDb.get(context)
+                .enqueueDutyEvent("off", at, java.util.UUID.randomUUID().toString(), null, null, prefs.employeeId)
+        }
 
         cancelHeartbeat(context)
         context.stopService(Intent(context, LocationService::class.java))
         // Whatever the day collected goes up now rather than waiting for the
         // next periodic window — the employee has just said they are finished.
         SyncScheduler.now(context)
+    }
+
+    /**
+     * End a duty left running past midnight.
+     *
+     * A day is the unit everything here is counted in — distance, stops, the
+     * attendance it files — so a duty is not allowed to spill into the next
+     * one. It is ended at the last moment of the day it started, and the
+     * employee is told. Checked by every heartbeat and every time the app
+     * opens, so it happens within minutes of midnight even in a pocket.
+     *
+     * @return true when it ended one.
+     */
+    fun endDutyIfDayChanged(context: Context): Boolean {
+        val prefs = Prefs.get(context)
+        if (!prefs.onDuty || prefs.dutyStartedAt == 0L) return false
+        val zone = java.time.ZoneId.systemDefault()
+        val started = java.time.Instant.ofEpochMilli(prefs.dutyStartedAt).atZone(zone).toLocalDate()
+        val today = java.time.LocalDate.now(zone)
+        if (!started.isBefore(today)) return false
+        val endOfDay = started.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli() - 1
+        stopDuty(context, StopReason.Midnight, at = endOfDay)
+        com.matrubhoomi.field.sync.Notifier.dutyEndedAtMidnight(context)
+        return true
+    }
+
+    /** The phone's own location switch — separate from the app's permission. */
+    fun isLocationSwitchOn(context: Context): Boolean {
+        val lm = context.getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
+        return androidx.core.location.LocationManagerCompat.isLocationEnabled(lm)
     }
 
     /**
@@ -83,8 +153,9 @@ object Tracking {
      */
     fun ensure(context: Context) {
         val prefs = Prefs.get(context)
-        if (!prefs.onDuty || !prefs.trackingEnabled) return
+        if (!prefs.onDuty || !prefs.trackingEnabled || !prefs.isFieldStaff) return
         if (!hasForegroundLocation(context)) return
+        if (endDutyIfDayChanged(context)) return
 
         val intent = Intent(context, LocationService::class.java).setAction(LocationService.ACTION_START)
 
@@ -201,6 +272,22 @@ object Tracking {
         }
     }
 
+    /**
+     * "Alarms & reminders" for this app. Only reachable on Android 12 and 12L:
+     * from 13 on the manifest's USE_EXACT_ALARM grants it at install, and this
+     * is never needed. Falls back to the app's page.
+     */
+    fun openExactAlarmSettings(context: Context) {
+        runCatching {
+            check(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+            context.startActivity(
+                Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
+                    .setData(Uri.parse("package:${context.packageName}"))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }.onFailure { openAppSettings(context) }
+    }
+
     /** The app's own settings page — where "Allow all the time" has to be set. */
     fun openAppSettings(context: Context) {
         context.startActivity(
@@ -220,6 +307,7 @@ object Tracking {
 class RestartReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (!Prefs.get(context).onDuty) return
+        if (Tracking.endDutyIfDayChanged(context)) return
         Tracking.ensure(context)
         // Re-armed here rather than repeated by the system — see scheduleHeartbeat.
         Tracking.scheduleHeartbeat(context)

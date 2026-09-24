@@ -43,7 +43,7 @@ data class FormField(
     companion object {
         fun from(o: JSONObject) = FormField(
             key = o.optString("key"),
-            label = o.optString("label"),
+            label = o.optString("label").takeUnless { it == "—" || it == "null" }.orEmpty(),
             type = o.optString("type", "text"),
             required = o.optBoolean("required"),
             placeholder = o.optString("placeholder"),
@@ -325,6 +325,14 @@ data class Bootstrap(
     val idleIntervalSeconds: Int,
     val minDistanceMeters: Int,
     val batchSize: Int,
+    /** How often a phone that has not moved still reports "I am here". */
+    val heartbeatSeconds: Int = 120,
+    val uploadEverySeconds: Int = 60,
+    /* ── The whole workforce's app ────────────────────────────────── */
+    val profile: Profile = Profile.EMPTY,
+    /** What this person's app shows — decided by the server. */
+    val capabilities: Capabilities = Capabilities.LEGACY_FIELD,
+    val counts: Counts = Counts.ZERO,
 ) {
     companion object {
         fun from(root: JSONObject): Bootstrap {
@@ -332,6 +340,21 @@ data class Bootstrap(
             val emp = d.optJSONObject("employee") ?: JSONObject()
             val tracking = d.optJSONObject("tracking") ?: JSONObject()
             return Bootstrap(
+                heartbeatSeconds = tracking.optInt("heartbeatSeconds", 120),
+                uploadEverySeconds = tracking.optInt("batchIntervalSeconds", 60),
+                profile = Profile.from(d.optJSONObject("profile")).let { p ->
+                    // An older server has no profile block; the employee block
+                    // still names them.
+                    if (p.id.isBlank()) p.copy(
+                        id = emp.optString("id"),
+                        name = emp.optString("name"),
+                        code = emp.optString("code"),
+                        designation = emp.optString("designation"),
+                        department = emp.optString("department"),
+                    ) else p
+                },
+                capabilities = Capabilities.from(d.optJSONObject("capabilities")),
+                counts = Counts.from(d.optJSONObject("counts")),
                 employeeName = emp.optString("name"),
                 employeeCode = emp.optString("code"),
                 employeeId = emp.optString("id"),
@@ -389,7 +412,92 @@ data class UploadedPhoto(
 
 data class PathPoint(val lat: Double, val lng: Double)
 
-data class Stop(val lat: Double, val lng: Double, val minutes: Int, val label: String)
+/**
+ * One entry on the day's timeline — a place the phone STAYED ("stayed in
+ * Kalmeshwar 10:42–11:27") or a VISIT that was recorded ("Ramesh Kumar").
+ * Named by the server, from the same readings the desk sees.
+ */
+data class DayStop(
+    val kind: String,
+    val lat: Double,
+    val lng: Double,
+    val arrivedAt: String,
+    val leftAt: String,
+    val minutes: Int,
+    val label: String,
+    val place: String,
+    val locality: String,
+    val district: String,
+    val ongoing: Boolean,
+    val insideStay: Boolean,
+    val visits: List<String>,
+) {
+    val isStay: Boolean get() = kind == "stay"
+    /** What a person calls the place: the village first, the road otherwise. */
+    val placeName: String get() = locality.ifBlank { place }
+
+    companion object {
+        fun from(o: JSONObject) = DayStop(
+            kind = o.optString("kind", "stay"),
+            lat = o.optDouble("lat"),
+            lng = o.optDouble("lng"),
+            arrivedAt = o.optString("arrivedAt"),
+            leftAt = o.optString("leftAt"),
+            minutes = o.optInt("minutes"),
+            label = o.optString("label"),
+            place = o.optString("place"),
+            locality = o.optString("locality"),
+            district = o.optString("district"),
+            ongoing = o.optBoolean("ongoing"),
+            insideStay = o.optBoolean("insideStay"),
+            visits = o.optJSONArray("visits").mapObjects { it.optString("label") }.filter { it.isNotBlank() },
+        )
+    }
+}
+
+/** The drive between two stays, measured along the drawn route. */
+data class DayLeg(val fromIndex: Int, val toIndex: Int, val km: Double, val minutes: Int, val avgKmh: Double?) {
+    companion object {
+        fun from(o: JSONObject) = DayLeg(
+            fromIndex = o.optInt("fromIndex"),
+            toIndex = o.optInt("toIndex"),
+            km = o.optDouble("km", 0.0).takeUnless { it.isNaN() } ?: 0.0,
+            minutes = o.optInt("minutes"),
+            avgKmh = o.optDoubleOrNull("avgKmh"),
+        )
+    }
+}
+
+/**
+ * What the office thinks the employee is doing right now:
+ * `stopped` (with since / minutes), `moving` (with speed), `off_duty`,
+ * `not_reporting` or `idle`.
+ */
+data class NowState(
+    val state: String,
+    val since: String,
+    val minutes: Int?,
+    val speedKmh: Double?,
+    val place: String,
+    val locality: String,
+) {
+    val placeName: String get() = locality.ifBlank { place }
+
+    companion object {
+        val IDLE = NowState("idle", "", null, null, "", "")
+        fun from(o: JSONObject?): NowState {
+            if (o == null) return IDLE
+            return NowState(
+                state = o.optString("state", "idle"),
+                since = o.optString("since").takeUnless { it == "null" }.orEmpty(),
+                minutes = o.optIntOrNull("minutes"),
+                speedKmh = o.optDoubleOrNull("speedKmh"),
+                place = o.optString("place"),
+                locality = o.optString("locality"),
+            )
+        }
+    }
+}
 
 /**
  * What the phone has recorded today, as the server counted it.
@@ -409,13 +517,25 @@ data class MyDay(
     val firstPingAt: String,
     val lastPingAt: String,
     val path: List<PathPoint>,
-    val stops: List<Stop>,
+    val stops: List<DayStop>,
+    val legs: List<DayLeg> = emptyList(),
+    val now: NowState = NowState.IDLE,
+    val position: PathPoint? = null,
+    val dutyOn: Boolean = false,
+    val dutyStartedAt: String = "",
+    val dutyEndedAt: String = "",
+    /** The field attendance ending duty filed: filed / updated / skipped, and why. */
+    val attendanceStatus: String = "",
+    val attendanceReason: String = "",
 ) {
     companion object {
         val EMPTY = MyDay(0.0, 0, 0, 0, 0, 0, "", "", emptyList(), emptyList())
 
         fun from(o: JSONObject?): MyDay {
             if (o == null) return EMPTY
+            val duty = o.optJSONObject("duty")
+            val att = o.optJSONObject("attendance")
+            val pos = o.optJSONObject("position")
             return MyDay(
                 distanceKm = o.optDouble("distanceKm", 0.0).takeUnless { it.isNaN() } ?: 0.0,
                 movingMinutes = o.optInt("movingMinutes"),
@@ -423,12 +543,25 @@ data class MyDay(
                 stopCount = o.optInt("stops"),
                 submissions = o.optInt("submissions"),
                 leadsCreated = o.optInt("leadsCreated"),
-                firstPingAt = o.optString("firstPingAt"),
-                lastPingAt = o.optString("lastPingAt"),
+                firstPingAt = o.optString("firstPingAt").takeUnless { it == "null" }.orEmpty(),
+                lastPingAt = o.optString("lastPingAt").takeUnless { it == "null" }.orEmpty(),
                 path = o.optJSONArray("path").mapObjects {
                     PathPoint(it.optDouble("lat"), it.optDouble("lng"))
                 }.filter { !it.lat.isNaN() && !it.lng.isNaN() },
-                stops = emptyList(),
+                stops = o.optJSONArray("timeline").mapObjects { DayStop.from(it) }
+                    .filter { !it.lat.isNaN() && !it.lng.isNaN() },
+                legs = o.optJSONArray("legs").mapObjects { DayLeg.from(it) },
+                now = NowState.from(o.optJSONObject("now")),
+                position = pos?.let { p ->
+                    val lat = p.optDouble("lat")
+                    val lng = p.optDouble("lng")
+                    if (lat.isNaN() || lng.isNaN()) null else PathPoint(lat, lng)
+                },
+                dutyOn = duty?.optBoolean("on") ?: false,
+                dutyStartedAt = duty?.optString("startedAt")?.takeUnless { it == "null" }.orEmpty(),
+                dutyEndedAt = duty?.optString("endedAt")?.takeUnless { it == "null" }.orEmpty(),
+                attendanceStatus = att?.optString("status").orEmpty(),
+                attendanceReason = att?.optString("reason").orEmpty(),
             )
         }
     }
@@ -588,18 +721,69 @@ data class AttendanceDay(
     val isHalfDay: Boolean get() = status == "HD" || status == "LHD"
     val isOff: Boolean get() = status == "WO" || status in setOf("PH", "FH", "NH", "OH", "RH")
 
+    /**
+     * Whether there is anything to say about the day. The server answers with
+     * a placeholder — no status, label "—" — once the day's sheet exists but
+     * has no row for this person yet, and shown as a record it put a lone dash
+     * where "nothing recorded yet" belonged.
+     */
+    val hasRecord: Boolean get() = status.isNotBlank() || inTime.isNotBlank()
+
+    /**
+     * The day in words. HR's codes — "LT", "HD", "WO" — are the muster roll's
+     * shorthand; on an employee's phone "LT · 09:44" read as a riddle.
+     */
+    val word: String get() {
+        // The sheet exists but has no punch for this person: say so, rather
+        // than a lone dash.
+        if (status.isBlank() && inTime.isBlank()) return "No punch recorded"
+        val server = label.trim()
+        // The server's own label when it is a word, not the code again.
+        if (server.length > 3 && !server.equals(status, ignoreCase = true)) return server
+        return attendanceWord(status).ifBlank { server }
+    }
+
     companion object {
         fun from(o: JSONObject) = AttendanceDay(
             dateStr = o.optString("dateStr"),
-            status = o.optString("effectiveStatus").ifBlank { o.optString("status") },
+            // The same precedence the portal uses: HR's decision always
+            // overrides the machine's prediction.
+            status = listOf("effectiveStatus", "hrFinalStatus", "systemPrediction", "status", "displayStatus")
+                .map { o.optString(it) }
+                .firstOrNull { it.isNotBlank() && it != "null" }
+                .orEmpty(),
             label = o.optString("label"),
-            inTime = o.optString("inTime"),
-            outTime = o.optString("finalOut"),
-            workDisplay = o.optString("workDisplay"),
+            inTime = o.optString("inTime").takeUnless { it == "null" }.orEmpty(),
+            outTime = o.optString("finalOut").takeUnless { it == "null" }.orEmpty()
+                .ifBlank { o.optString("outTime").takeUnless { it == "null" }.orEmpty() },
+            workDisplay = o.optString("workDisplay").takeUnless { it == "null" }.orEmpty(),
             isLate = o.optBoolean("isLate"),
             lateMins = o.optInt("lateMins"),
         )
     }
+}
+
+/** HR's attendance codes, in the words an employee uses. Unknown codes pass through. */
+fun attendanceWord(code: String): String = when (code.trim().uppercase()) {
+    "P", "P*", "P~", "PR" -> "Present"
+    "LT", "L", "LATE" -> "Late"
+    "HD", "H/D" -> "Half day"
+    "LHD" -> "Half day"
+    "AB", "A", "LAB", "EAB" -> "Absent"
+    "WO", "W/O", "OFF" -> "Week off"
+    "PH", "NH" -> "Holiday"
+    "FH" -> "Festival holiday"
+    "OH" -> "Optional holiday"
+    "RH" -> "Restricted holiday"
+    "MP" -> "Missed punch"
+    "WFH" -> "Work from home"
+    "CO" -> "Comp off"
+    "OD" -> "On duty"
+    "CL" -> "Casual leave"
+    "SL" -> "Sick leave"
+    "PL" -> "Privilege leave"
+    "LOP", "LWP" -> "Unpaid leave"
+    else -> code
 }
 
 data class AttendanceMonth(

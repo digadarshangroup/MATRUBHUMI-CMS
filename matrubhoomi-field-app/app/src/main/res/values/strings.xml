@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Matrubhoomi Field</string>
+    <string name="app_name">Matrubhoomi</string>
     <string name="tracking_channel_name">On duty</string>
     <string name="tracking_channel_desc">Shows while your round is being recorded. It cannot be dismissed — that is what keeps the recording alive.</string>
     <string name="sync_channel_name">Sending records</string>

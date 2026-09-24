@@ -16,8 +16,8 @@ android {
         // implementation for a handful of handsets nobody in the field carries.
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 3
+        versionName = "2.1.0"
 
         // The API's address is a BUILD input, not a constant. The field team's
         // handsets point at production; a developer's points at their laptop on
@@ -68,6 +68,12 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-service:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
+
+    // App lock. Payslips, salary and bank details are inside this app, and a
+    // shared or lost phone should not open them — fingerprint, face or the
+    // phone's own PIN, through the system prompt.
+    implementation("androidx.biometric:biometric:1.1.0")
 
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)
