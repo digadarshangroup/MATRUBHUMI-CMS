@@ -16,8 +16,8 @@ android {
         // implementation for a handful of handsets nobody in the field carries.
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "2.1.0"
+        versionCode = 4
+        versionName = "2.1.1"
 
         // The API's address is a BUILD input, not a constant. The field team's
         // handsets point at production; a developer's points at their laptop on
