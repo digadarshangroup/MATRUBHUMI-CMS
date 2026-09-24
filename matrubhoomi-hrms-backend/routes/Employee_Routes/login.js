@@ -1,7 +1,13 @@
 const express = require("express");
-const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const Employee = require("../../models/Employee");
+const {
+  matchesEmployeePassword,
+  upgradeEmployeePassword,
+  setChosenEmployeePassword,
+  defaultFromNameAndDob,
+} = require("../../utils/employeePassword");
+const { activeEmployeeFilter, isEmployeeActive } = require("../../utils/employeeActive");
 
 const router = express.Router();
 
@@ -33,12 +39,6 @@ const extractDateComponents = (dateOfBirth) => {
   };
 };
 
-// Default password = employee's mobile number
-const generateDefaultPassword = (phone) => {
-  if (!phone) return null;
-  return phone.trim();
-};
-
 // Helper: populate and format employee response
 async function getFormattedEmployee(employeeId) {
   const employee = await Employee.findById(employeeId)
@@ -57,7 +57,7 @@ async function getFormattedEmployee(employeeId) {
   // check has to be here too — this is the pair of routes the app calls on
   // launch to restore a session. Returning null sends it to the login screen,
   // where the plain message is waiting.
-  if (!employee || !employee.isActive || employee.employmentType === "intern")
+  if (!isEmployeeActive(employee) || employee.employmentType === "intern")
     return null;
 
   const responseData = employee.toObject();
@@ -109,10 +109,12 @@ router.post("/login", async (req, res) => {
         .status(400)
         .json({ success: false, message: "Password is required" });
 
-    const employee = await Employee.findOne({
-      phone: phoneNumber,
-      $or: [{ status: "active" }, { isActive: true }],
-    }).select("+password");
+    // BOTH flags must say "employed" — see utils/employeeActive.js. This used
+    // to accept either one, so an employee HR had marked inactive in only one
+    // of the two fields could still sign in.
+    const employee = await Employee.findOne(
+      activeEmployeeFilter({ phone: phoneNumber }),
+    ).select("+password +temporaryPassword");
     if (!employee)
       return res
         .status(401)
@@ -134,25 +136,29 @@ router.post("/login", async (req, res) => {
           "please speak to HR.",
       });
 
-    let isMatch = false;
-    if (employee.password) {
-      if (employee.password.startsWith("$2"))
-        isMatch = await bcrypt.compare(password, employee.password);
-      else isMatch = password === employee.password;
-    }
-    if (!isMatch && employee.phone) {
-      const defaultPassword = generateDefaultPassword(employee.phone);
-      if (defaultPassword && password === defaultPassword) {
-        isMatch = true;
-        const salt = await bcrypt.genSalt(10);
-        employee.password = await bcrypt.hash(defaultPassword, salt);
-        await employee.save();
-      }
-    }
-    if (!isMatch)
+    // The same matcher the CMS login uses (utils/employeePassword.js), so the
+    // two front doors cannot disagree about a password. The phone number only
+    // works while the account is still on the password the system issued —
+    // it used to work forever, after any number of changes, and reset the
+    // password back to itself.
+    const match = await matchesEmployeePassword(employee, password);
+    if (!match.ok)
       return res
         .status(401)
         .json({ success: false, message: "Invalid phone number or password" });
+    if (match.needsUpgrade) {
+      // updateOne, never .save(): the pre-save hook re-encrypts the salary
+      // block, which has no business running because somebody signed in.
+      await upgradeEmployeePassword(Employee, employee._id, password);
+    }
+
+    // Still on the password the system issued — the phone number (a new
+    // hire, or HR's reset) or the name-and-birthday default. The app asks for
+    // a password of their own before anything else. Worked out from what was
+    // just typed, so nothing extra is stored.
+    const mustChangePassword =
+      String(password) === String(employee.phone || "") ||
+      String(password) === String(defaultFromNameAndDob(employee.firstName, employee.dateOfBirth) || "");
 
     const expiresIn = rememberMe ? "30d" : "7d";
     const maxAge = rememberMe
@@ -198,6 +204,7 @@ router.post("/login", async (req, res) => {
           role: employee.role || "employee",
         },
         token,
+        mustChangePassword,
       },
     });
   } catch (err) {
@@ -287,35 +294,35 @@ router.post("/change-password", async (req, res) => {
         message: "Both old and new passwords are required",
       });
 
+    if (String(newPassword).length < 6)
+      return res.status(400).json({
+        success: false,
+        message: "New password must be at least 6 characters long",
+      });
+
     const employee = await Employee.findById(decoded.id).select(
-      "+password firstName dateOfBirth",
+      // NOT "+password firstName …": a `+field` inside an INCLUSIVE
+      // projection makes mongoose drop the password, and the matcher then
+      // accepted the PHONE NUMBER as the current password for everybody
+      // (and refused the real one). Same trap as routes/auth/deptAuth.js.
+      "+temporaryPassword",
     );
-    if (!employee)
+    if (!employee || !isEmployeeActive(employee))
       return res
         .status(404)
         .json({ success: false, message: "Employee not found" });
 
-    let isValid = false;
-    if (employee.password) {
-      if (employee.password.startsWith("$2"))
-        isValid = await bcrypt.compare(oldPw, employee.password);
-      else isValid = oldPw === employee.password;
-    }
-    if (!isValid && employee.firstName && employee.dateOfBirth) {
-      const defaultPassword = generateDefaultPassword(
-        employee.firstName,
-        employee.dateOfBirth,
-      );
-      isValid = oldPw === defaultPassword;
-    }
-    if (!isValid)
+    // The shared matcher. This used to accept the employee's FIRST NAME as
+    // the current password (a helper written for phone numbers, called with a
+    // name), so anybody holding an unlocked phone could change the password
+    // without knowing it.
+    const match = await matchesEmployeePassword(employee, oldPw);
+    if (!match.ok)
       return res
         .status(401)
         .json({ success: false, message: "Current password is incorrect" });
 
-    const salt = await bcrypt.genSalt(10);
-    employee.password = await bcrypt.hash(newPassword, salt);
-    await employee.save();
+    await setChosenEmployeePassword(Employee, employee._id, newPassword);
 
     res
       .status(200)

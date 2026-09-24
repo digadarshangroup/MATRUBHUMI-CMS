@@ -34,13 +34,33 @@ const SalesScheme = require("../../models/Sales_Models/SalesScheme");
 const SalesStage = require("../../models/Sales_Models/SalesStage");
 const FieldDay = require("../../models/Sales_Models/FieldDay");
 
+const Employee = require("../../models/Employee");
+const EmployeeNotification = require("../../models/EmployeeNotification");
+
 const pipeline = require("../../services/salesPipeline");
 const { issueOtp, verifyOtp, normalisePhone } = require("../../services/salesOtp");
-const { ingestBatch, dayKey } = require("../../services/fieldTracking");
+const tracking = require("../../services/fieldTracking");
+const { ingestBatch, dayKey } = tracking;
 const { uploadToCloudinary } = require("../../services/mediaUpload.service");
+const { requireFieldStaff } = require("../../services/fieldAccess");
+const { pendingApprovalCounts, directReportCount } = require("../../services/approvalQueue");
 
 // Every route here is an authenticated employee with a resolved identity.
 router.use(AllEmployeeAppMiddleware, FieldEmployeeContext);
+
+// THE APP IS EVERYBODY'S NOW; THE FIELD WORK IS NOT.
+//
+// This router used to serve only the sales team, so "has an employee token"
+// was enough to create leads, look up any farmer, send OTPs and post a location
+// trail. The same APK is now the whole workforce's app, and an accountant's
+// phone must never be able to write — or be asked for — a position. Everything
+// below except /bootstrap is field work, and field staff only
+// (services/fieldAccess.js decides who that is). /bootstrap stays open because
+// it is how the app learns which of the two it is.
+router.use(
+  ["/tasks", "/leads", "/submissions", "/uploads", "/otp", "/location", "/me", "/duty"],
+  requireFieldStaff,
+);
 
 /** Same contract as the desk side: `status` means the caller, bare means us. */
 function sendError(res, err, context = "field") {
@@ -111,10 +131,114 @@ function taskForApp(task) {
 /* Bootstrap                                                           */
 /* ------------------------------------------------------------------ */
 
+/** The cadence the location service runs at. Read by the app from here, never hardcoded. */
+function trackingConfig(enabled) {
+  return {
+    enabled,
+    intervalSeconds: Number(process.env.FIELD_PING_INTERVAL_S || 20),
+    idleIntervalSeconds: Number(process.env.FIELD_IDLE_INTERVAL_S || 120),
+    // How often a phone that has not moved still reports "I am here". Without
+    // it a stationary phone sends nothing at all (the provider only delivers a
+    // fix once it has moved), and a forty-minute visit is invisible.
+    heartbeatSeconds: Number(process.env.FIELD_HEARTBEAT_S || 120),
+    minDistanceMeters: Number(process.env.FIELD_MIN_DISTANCE_M || 15),
+    batchSize: Number(process.env.FIELD_BATCH_SIZE || 20),
+    // The longest a recorded fix waits on the phone before it is sent — which
+    // is how far behind the desk's live board can be.
+    batchIntervalSeconds: Number(process.env.FIELD_BATCH_INTERVAL_S || 60),
+    stopMinutes: tracking.STOP_MINUTES,
+    stopRadiusMeters: tracking.STOP_RADIUS_M,
+  };
+}
+
 router.get("/bootstrap", async (req, res) => {
   try {
     const employee = req.employee;
     const today = dayKey(new Date());
+
+    /* ── Who this is, and what the app should show them ──────────── */
+    //
+    // The same APK serves the whole workforce. What differs is decided HERE,
+    // on the server, and handed to the app as capabilities — the app never
+    // works out from a department name whether somebody is sales staff, so a
+    // rule that changes is changed once, in services/fieldAccess.js.
+    const [identity, teamSize, approvals, unread] = await Promise.all([
+      Employee.findById(employee.id)
+        .select("email profilePhoto dateOfJoining employmentType workPhone")
+        .lean(),
+      directReportCount(employee.id),
+      pendingApprovalCounts(employee.id),
+      EmployeeNotification.countDocuments({ employeeId: employee.id, readAt: null }),
+    ]);
+
+    const field = Boolean(employee.isFieldStaff);
+    const trackingOn = field && process.env.FIELD_TRACKING_ENABLED !== "false";
+
+    const common = {
+      employee: {
+        id: String(employee.id),
+        name: employee.name,
+        code: employee.code,
+        designation: employee.designation,
+        department: employee.department,
+      },
+      profile: {
+        id: String(employee.id),
+        name: employee.name,
+        firstName: employee.firstName,
+        code: employee.code,
+        designation: employee.designation,
+        department: employee.department,
+        phone: employee.phone,
+        workPhone: identity?.workPhone || "",
+        email: identity?.email || "",
+        photo: identity?.profilePhoto?.url || "",
+        joinedOn: identity?.dateOfJoining || null,
+        employmentType: identity?.employmentType || "",
+        // ONE reporting manager. The secondary manager is no longer part of
+        // any approval chain this app starts.
+        manager: employee.managerId ? { id: employee.managerId, name: employee.managerName } : null,
+      },
+      capabilities: {
+        // Sales field work: assignments, customers, forms, OTPs.
+        field,
+        // The location recording, and every prompt that asks for location.
+        tracking: trackingOn,
+        // Ending duty files the day's attendance for the manager to confirm.
+        fieldAttendance: field && process.env.FIELD_ATTENDANCE_ENABLED !== "false",
+        // Approvals: people report to them, or something still waits on them.
+        manager: teamSize > 0 || approvals.total > 0,
+        teamSize,
+        overtime: process.env.APP_OVERTIME_ENABLED !== "false",
+        standings: process.env.APP_STANDINGS_ENABLED !== "false",
+      },
+      counts: {
+        approvals: approvals.total,
+        approvalsByKind: approvals,
+        unreadNotifications: unread,
+      },
+      serverTime: new Date().toISOString(),
+    };
+
+    if (!field) {
+      // Everybody who is not field staff gets the same SHAPE with no field work
+      // in it, so an older app build still parses it — and no tracking config
+      // that could start a location service.
+      return res.json({
+        success: true,
+        data: {
+          ...common,
+          tasks: [],
+          stages: [],
+          templates: [],
+          schemes: [],
+          newCustomerTemplateId: null,
+          today: { day: today, distanceKm: 0, submissions: 0, leadsCreated: 0 },
+          recentDays: [],
+          tracking: trackingConfig(false),
+        },
+      });
+    }
 
     // Six days back plus today. Computed from the DATE KEY rather than by
     // subtracting milliseconds, so it lands on the same boundaries the rollups
@@ -189,14 +313,7 @@ router.get("/bootstrap", async (req, res) => {
     res.json({
       success: true,
       data: {
-        employee: {
-          id: String(employee.id),
-          name: employee.name,
-          code: employee.code,
-          designation: employee.designation,
-          department: employee.department,
-        },
-        serverTime: new Date().toISOString(),
+        ...common,
         tasks: tasks.map(taskForApp),
         stages: stages.map((s) => ({
           key: s.key, name: s.name, order: s.order, tone: s.tone,
@@ -264,14 +381,7 @@ router.get("/bootstrap", async (req, res) => {
         // The service reads its own cadence from here rather than hardcoding
         // it, so battery behaviour can be retuned for the whole fleet without
         // shipping an APK to twenty handsets scattered across three districts.
-        tracking: {
-          enabled: process.env.FIELD_TRACKING_ENABLED !== "false",
-          intervalSeconds: Number(process.env.FIELD_PING_INTERVAL_S || 20),
-          idleIntervalSeconds: Number(process.env.FIELD_IDLE_INTERVAL_S || 120),
-          minDistanceMeters: Number(process.env.FIELD_MIN_DISTANCE_M || 15),
-          batchSize: Number(process.env.FIELD_BATCH_SIZE || 20),
-          batchIntervalSeconds: Number(process.env.FIELD_BATCH_INTERVAL_S || 120),
-        },
+        tracking: trackingConfig(trackingOn),
       },
     });
   } catch (err) {
@@ -644,14 +754,32 @@ router.post("/location/batch", async (req, res) => {
       batchId: req.body.batchId || "",
     });
 
+    // Where the office now thinks they are — so the on-duty notification can
+    // say "At Kalmeshwar · 25 min" from the same reading the desk sees, rather
+    // than the phone guessing a different answer on its own.
+    const today = await FieldDay.findOne({ employeeId: req.employee.id, day: dayKey(new Date()) })
+      .select("day lastPingAt lastSpeed lastLat lastLng lastPlace lastLocality lastDistrict lastPlaceKey stay dutyOn dutyEndedAt distanceMeters")
+      .lean();
+    const now = tracking.presentState(today);
+
     res.json({
       success: true,
       data: out,
+      now: {
+        state: now.state,
+        place: now.locality || now.place || "",
+        since: now.since || null,
+        minutes: now.minutes ?? null,
+        speedKmh: now.speedKmh ?? null,
+        distanceKm: Math.round(((today?.distanceMeters || 0) / 100)) / 10,
+      },
       // Echoed back so the service can retune without a second request. The app
       // asks the server what cadence to run at rather than deciding for itself.
       tracking: {
         intervalSeconds: Number(process.env.FIELD_PING_INTERVAL_S || 20),
         idleIntervalSeconds: Number(process.env.FIELD_IDLE_INTERVAL_S || 120),
+        heartbeatSeconds: Number(process.env.FIELD_HEARTBEAT_S || 120),
+        batchIntervalSeconds: Number(process.env.FIELD_BATCH_INTERVAL_S || 60),
       },
     });
   } catch (err) {
@@ -659,11 +787,54 @@ router.post("/location/batch", async (req, res) => {
   }
 });
 
-/** The employee's own day. They are entitled to see what is being recorded. */
+/* ------------------------------------------------------------------ */
+/* Duty                                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The employee switching duty on or off, from the app's outbox.
+ *
+ * Body: { events: [{ state: "on"|"off", at, ref, lat?, lng? }] }
+ *
+ * Idempotent on each event's `ref`. Switching duty OFF also files the day's
+ * field attendance for the manager to confirm (services/fieldAttendance.js) —
+ * the answer comes back so the app can tell the employee it went.
+ */
+router.post("/duty", async (req, res) => {
+  try {
+    const { fileFieldAttendance, MIN_MINUTES } = require("../../services/fieldAttendance");
+    const days = await tracking.recordDutyEvents({
+      employee: req.employee,
+      events: req.body?.events || [],
+    });
+
+    const attendance = [];
+    for (const d of days.filter((x) => x.ended)) {
+      // `minMinutes` so the app can say what "too short" means in minutes,
+      // rather than a rule the employee cannot see.
+      attendance.push({
+        day: d.day,
+        minMinutes: MIN_MINUTES,
+        ...(await fileFieldAttendance({ employeeId: req.employee.id, day: d.day })),
+      });
+    }
+
+    res.json({ success: true, data: { days, attendance } });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+/**
+ * The employee's own day. They are entitled to see what is being recorded —
+ * the same stops, names and figures the desk sees, from the same source.
+ */
 router.get("/me/day", async (req, res) => {
   try {
     const day = req.query.day || dayKey(new Date());
     const row = await FieldDay.findOne({ employeeId: req.employee.id, day }).lean();
+    const now = tracking.presentState(row);
+    const timeline = tracking.timelineOf(row);
 
     res.json({
       success: true,
@@ -673,12 +844,34 @@ router.get("/me/day", async (req, res) => {
             distanceKm: Math.round((row.distanceMeters || 0) / 100) / 10,
             movingMinutes: Math.round((row.movingSeconds || 0) / 60),
             idleMinutes: Math.round((row.idleSeconds || 0) / 60),
-            stops: (row.stops || []).length,
+            // A COUNT of the stays, for an older app build that reads a number
+            // here. The list itself is `timeline`.
+            stops: timeline.entries.filter((e) => e.kind === "stay").length,
             submissions: row.submissionCount || 0,
             leadsCreated: row.leadsCreated || 0,
             firstPingAt: row.firstPingAt,
             lastPingAt: row.lastPingAt,
             path: row.path || [],
+            now,
+            position:
+              row.lastLat != null
+                ? { lat: row.lastLat, lng: row.lastLng, accuracy: row.lastAccuracy, battery: row.lastBattery }
+                : null,
+            timeline: timeline.entries,
+            legs: timeline.legs,
+            duty: {
+              on: row.dutyOn === true,
+              startedAt: row.dutyStartedAt,
+              endedAt: row.dutyEndedAt,
+              sessions: (row.dutySessions || []).map((s) => ({ startAt: s.startAt, endAt: s.endAt })),
+            },
+            attendance: row.attendance?.status
+              ? {
+                  status: row.attendance.status,
+                  reason: row.attendance.reason,
+                  requestId: row.attendance.requestId ? String(row.attendance.requestId) : null,
+                }
+              : null,
           }
         : null,
     });

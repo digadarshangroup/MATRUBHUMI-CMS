@@ -906,6 +906,7 @@ async function recordSubmission({ employee, input }) {
     lng: location.lng,
     leadId: lead._id,
     label: lead.name,
+    village: lead.address?.village || "",
   }).catch((err) => console.warn("[sales] day rollup:", err.message));
 
   const fresh = await SalesLead.findById(lead._id).lean();

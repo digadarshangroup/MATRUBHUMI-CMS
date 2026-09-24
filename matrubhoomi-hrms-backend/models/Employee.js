@@ -51,7 +51,10 @@ const employeeSchema = new mongoose.Schema({
   dateOfBirth: { type: Date },
   gender: {
     type: String,
-    enum: ["Male", "Female", "Other", "male", "female"],
+    // "" is the DEFAULT, so it has to be an allowed value: without it every
+    // record saved without a gender — an import row, a script, a form that
+    // skipped the field — failed validation on a value nobody supplied.
+    enum: ["Male", "Female", "Other", "male", "female", ""],
     default: "",
   },
   bloodGroup: { type: String },
@@ -455,6 +458,20 @@ const employeeSchema = new mongoose.Schema({
   // notifications on the first. Web Push subscriptions now live in their own
   // collection, keyed by endpoint: see models/PushSubscription.js.
   pushToken: { type: String, default: null },
+
+  // ─── THE EMPLOYEE APP ────────────────────────────────────────────────────────
+  // Written by Middlewear/AllEmployeeAppMiddleware.js from the headers the
+  // Android app sends, at most every few minutes — so HR can see who has the
+  // app, on which version, and who has never signed in. Never read to decide
+  // anything about the person.
+  appInfo: {
+    firstSeenAt: { type: Date, default: null },
+    lastSeenAt: { type: Date, default: null },
+    version: { type: String, default: "" },
+    build: { type: Number, default: 0 },
+    device: { type: String, default: "" },
+    os: { type: String, default: "" },
+  },
 
   // ─── SYSTEM ──────────────────────────────────────────────────────────────────
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "HRDepartment" },

@@ -69,9 +69,12 @@ const fieldLocationPingSchema = new mongoose.Schema(
 
     // Why this fix exists. `form` and `task` fixes are the ones the desk sees
     // as pins; `service` fixes are the trail between them.
+    // `heartbeat` is the fix the app asks for when the phone has NOT moved:
+    // the provider reports only after movement, so without it a stationary
+    // phone sends nothing and a long visit is invisible.
     source: {
       type: String,
-      enum: ["service", "manual", "form", "task", "punch", "boot"],
+      enum: ["service", "manual", "form", "task", "punch", "boot", "heartbeat"],
       default: "service",
     },
     taskId: { type: mongoose.Schema.Types.ObjectId, ref: "SalesTask", default: null },

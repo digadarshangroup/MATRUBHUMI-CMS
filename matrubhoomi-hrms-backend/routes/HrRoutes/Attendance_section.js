@@ -1976,7 +1976,18 @@ async function applyRegularizationToAttendance(r, actor = {}) {
   // has injected missing employee rows since it was written.
   let dayDoc = await DailyAttendance.findOne({ dateStr: r.dateStr });
   if (!dayDoc) {
-    dayDoc = new DailyAttendance({ dateStr: r.dateStr, employees: [] });
+    // The same day header the sync writes (see syncDay's dayMeta). Created
+    // with `dateStr` alone, the save failed validation on the two required
+    // fields — so an approved correction for a day the machine had not synced
+    // (a field day, typically) was approved and never written.
+    const date = new Date(r.dateStr + "T00:00:00");
+    dayDoc = new DailyAttendance({
+      dateStr: r.dateStr,
+      date,
+      yearMonth: r.dateStr.slice(0, 7),
+      dayOfWeek: date.getDay(),
+      employees: [],
+    });
   }
 
   let idx = (dayDoc.employees || []).findIndex((e) => e.biometricId === bid);
@@ -7205,7 +7216,13 @@ router.post("/regularizations", EmployeeAuthMiddlewear, async (req, res) => {
       documentFileName: documentFileName || null,
       documentUploadedAt: documentUrl ? new Date() : null,
       originalSnapshot,
-      managersNotified: Array.isArray(managersNotified) ? managersNotified : [],
+      // One reporting manager (services/approvalChain.js): whatever chain the
+      // screen sent, only its primary is kept, so the request is final at the
+      // first decision like every other request filed today.
+      managersNotified: (Array.isArray(managersNotified) ? managersNotified : [])
+        .filter((m) => m && m.managerId && (m.type || "primary") === "primary")
+        .slice(0, 1),
+      source: "hr",
       status: "pending",
     });
     res.status(201).json({

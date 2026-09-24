@@ -27,6 +27,7 @@ const SalesEvent = require("../../models/Sales_Models/SalesEvent");
 const SalesScheme = require("../../models/Sales_Models/SalesScheme");
 const SalesFormSubmission = require("../../models/Sales_Models/SalesFormSubmission");
 const { listSteps } = require("../../services/salesSchemes");
+const { notifyVisitDecision } = require("../../services/salesNotify");
 const { deskRead, deskApprove, actorFrom, sendError } = require("./_deskAuth");
 
 /* ------------------------------------------------------------------ */
@@ -115,6 +116,9 @@ router.post("/approvals/:id/approve", deskApprove, async (req, res) => {
       });
     }
 
+    // The employee who filed it hears about it in the app.
+    notifyVisitDecision(result, "approved", req.body?.note || "");
+
     const io = req.app.get("io");
     if (io) {
       // The desk room, not every connected socket — see the note in fieldApp.js.
@@ -149,6 +153,8 @@ router.post("/approvals/:id/reject", deskApprove, async (req, res) => {
     if (result.alreadyDecided) {
       return res.json({ success: true, data: result, message: `This was already ${result.decision}.` });
     }
+
+    notifyVisitDecision(result, "rejected", req.body?.reason || "");
 
     const io = req.app.get("io");
     if (io) {

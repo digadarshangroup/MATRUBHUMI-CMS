@@ -58,6 +58,7 @@ const router = express.Router();
 const AllEmployeeAppMiddleware = require("../../Middlewear/AllEmployeeAppMiddleware");
 const Employee = require("../../models/Employee");
 const DailyAttendance = require("../../models/HR_Models/Dailyattendance");
+const { activeEmployeeFilter } = require("../../utils/employeeActive");
 const { LeaveApplication } = require("../../models/HR_Models/LeaveManagement");
 const { ABSENT_SET, LEAVE_SET, HALFDAY_SET } = require("../../utils/performanceStats");
 
@@ -197,9 +198,7 @@ router.get("/", AllEmployeeAppMiddleware, async (req, res) => {
     // proportion. "6 away" means nothing on its own — 6 out of 40 is a
     // staffing problem and 6 out of 400 is a Tuesday. One cheap count query
     // per month view is a fair price for numbers that can actually be read.
-    const headcount = await Employee.countDocuments({
-      $or: [{ isActive: true }, { isActive: { $exists: false } }],
-    });
+    const headcount = await Employee.countDocuments(activeEmployeeFilter());
 
     // The peak needs its DATE to be useful. "Busiest day: 6" tells a planner
     // nothing they can act on; "6 on Mon 17" tells them which day to look at.
@@ -282,10 +281,9 @@ router.get("/day", AllEmployeeAppMiddleware, async (req, res) => {
       });
     }
 
-    const employees = await Employee.find({
-      biometricId: { $in: [...away.keys()] },
-      $or: [{ isActive: true }, { isActive: { $exists: false } }],
-    })
+    const employees = await Employee.find(
+      activeEmployeeFilter({ biometricId: { $in: [...away.keys()] } }),
+    )
       // No `phone`. See the header — not selected rather than dropped later,
       // so it cannot leak through a response body or a debug log.
       .select("firstName middleName lastName biometricId department designation profileImage")

@@ -1,6 +1,15 @@
 "use strict";
 const express = require("express");
 const router = express.Router();
+
+// Every route here that names a leave by id: a malformed id is "not found",
+// never a 500 carrying Mongoose's cast error.
+router.param("id", (req, res, next, id) => {
+  if (!require("mongoose").Types.ObjectId.isValid(id)) {
+    return res.status(404).json({ success: false, message: "Not found" });
+  }
+  next();
+});
 const mongoose = require("mongoose");
 const multer = require("multer");
 // Push notifications — every leave event goes through utils/notifyEmployee.js,
@@ -18,6 +27,8 @@ const {
 } = require("../../utils/notifyEmployee");
 const { uploadPublicFile } = require("../../services/mediaUpload.service");
 const { absoluteUrl } = require("../../utils/letterDownloadToken");
+// Every new request waits on ONE reporting manager — see the file's header.
+const { approvalChain } = require("../../services/approvalChain");
 // Derived (never stored) reservation held by pending / manager_approved
 // applications. See utils/leaveReserve.js for why this is not a schema field.
 const { computeReserved } = require("../../utils/leaveReserve");
@@ -58,6 +69,30 @@ const {
   LeaveApplication,
   CompanyHoliday,
 } = require("../../models/HR_Models/LeaveManagement");
+
+/**
+ * A real calendar date in the YYYY-MM-DD shape every leave row keys by.
+ * "2026-13-45" or "tomorrow" used to reach the balance lookup as NaN and come
+ * back as a 500 with a Mongoose cast error in it.
+ */
+function isDateStr(s) {
+  if (typeof s !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const [y, m, d] = s.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return (
+    dt.getUTCFullYear() === y &&
+    dt.getUTCMonth() === m - 1 &&
+    dt.getUTCDate() === d
+  );
+}
+
+function badDate(res) {
+  return res.status(400).json({
+    success: false,
+    code: "BAD_DATE",
+    message: "Dates must be real calendar dates (YYYY-MM-DD).",
+  });
+}
 
 function countLeaveDays(startStr, endStr) {
   if (!startStr || !endStr) return 0;
@@ -149,6 +184,7 @@ async function resolveLeaveOverlap({
   toDate,
   leaveType,
   isHalfDay,
+  halfDaySlot,
   excludeId,
 }) {
   const q = {
@@ -158,14 +194,29 @@ async function resolveLeaveOverlap({
     toDate: { $gte: fromDate },
   };
   if (excludeId) q._id = { $ne: excludeId };
-  const existing = await LeaveApplication.findOne(q);
-  if (!existing) return { action: "none" };
-  const sameType = String(existing.leaveType) === String(leaveType);
-  const sameRange =
-    existing.fromDate === fromDate && existing.toDate === toDate;
-  const sameHalf = !!existing.isHalfDay === !!isHalfDay;
-  if (sameType && sameRange && sameHalf) return { action: "replace", existing };
-  return { action: "block", existing };
+  // The two halves of one day are two requests, not a duplicate: a morning
+  // off and an afternoon off on the same date do not conflict. The afternoon
+  // used to be answered as a "duplicate" of the morning and never booked.
+  const found = await LeaveApplication.find(q);
+  const slotOf = (half, slot) => (half ? slot || "first_half" : null);
+  const mySlot = slotOf(isHalfDay, halfDaySlot);
+  let replace = null;
+  for (const existing of found) {
+    const theirSlot = slotOf(existing.isHalfDay, existing.halfDaySlot);
+    const sameRange =
+      existing.fromDate === fromDate && existing.toDate === toDate;
+    if (sameRange && mySlot && theirSlot && mySlot !== theirSlot) continue;
+    if (
+      sameRange &&
+      theirSlot === mySlot &&
+      String(existing.leaveType) === String(leaveType)
+    ) {
+      replace = existing;
+      continue;
+    }
+    return { action: "block", existing };
+  }
+  return replace ? { action: "replace", existing: replace } : { action: "none" };
 }
 
 function overlapBlockResponse(res, existing) {
@@ -406,12 +457,12 @@ router.get("/manager/my-team", AllEmployeeAppMiddleware, async (req, res) => {
   try {
     res.json({
       success: true,
+      // The people who report to me — through the ONE reporting manager
+      // (services/approvalChain.js). A stale secondaryManager on an old record
+      // no longer makes somebody part of my team.
       data: await Employee.find({
         isActive: true,
-        $or: [
-          { "primaryManager.managerId": req.user.id },
-          { "secondaryManager.managerId": req.user.id },
-        ],
+        "primaryManager.managerId": req.user.id,
       })
         .select(
           "firstName lastName biometricId department designation primaryManager secondaryManager",
@@ -736,15 +787,25 @@ router.post(
         leaveType,
         fromDate,
         toDate,
-        reason,
         isHalfDay,
         halfDaySlot,
         managerRemarks,
       } = req.body;
+      const reason =
+        typeof req.body.reason === "string" ? req.body.reason.trim() : "";
       if (!employeeId || !leaveType || !fromDate || !toDate || !reason)
         return res
           .status(400)
           .json({ success: false, message: "All fields required" });
+      if (!isDateStr(fromDate) || !isDateStr(toDate)) return badDate(res);
+      if (toDate < fromDate)
+        return res
+          .status(400)
+          .json({ success: false, message: "To date before from date" });
+      if (!require("mongoose").Types.ObjectId.isValid(employeeId))
+        return res
+          .status(404)
+          .json({ success: false, message: "Employee not found" });
       if (!["CL", "SL", "PL", "LOP"].includes(leaveType))
         return res
           .status(400)
@@ -759,16 +820,17 @@ router.post(
         return res
           .status(404)
           .json({ success: false, message: "Employee not found" });
-      const isP = String(te.primaryManager?.managerId) === String(myId),
-        isS = String(te.secondaryManager?.managerId) === String(myId);
-      if (!isP && !isS)
+      // One reporting manager (services/approvalChain.js) — only they may file
+      // on somebody's behalf.
+      const isP = String(te.primaryManager?.managerId) === String(myId);
+      if (!isP)
         return res
           .status(403)
           .json({ success: false, message: "Not a manager of this employee" });
       const config = await LeaveConfig.getConfig();
       const year = new Date(fromDate).getFullYear();
       const wd = workingDaysSinceJoining(te.dateOfJoining);
-      if (wd < config.initialWaitingDays)
+      if (wd < config.initialWaitingDays && leaveType !== "LOP")
         return res.status(400).json({
           success: false,
           message: `Waiting period not complete (${wd}/${config.initialWaitingDays})`,
@@ -791,6 +853,7 @@ router.post(
         toDate,
         leaveType,
         isHalfDay,
+        halfDaySlot,
       });
       if (overlap.action === "block")
         return overlapBlockResponse(res, overlap.existing);
@@ -824,25 +887,20 @@ router.post(
           SL: config.slPerYear,
           PL: bal.plEligible ? config.plPerYear : 0,
         };
-        const av = Math.max(0, le[leaveType] - bal.consumed[leaveType]);
+        // Days already held by the employee's own pending requests count
+        // too — without them, this approval plus theirs could spend a bucket
+        // twice over.
+        const held = await computeReserved(employeeId, year);
+        const av = Math.max(
+          0,
+          le[leaveType] - bal.consumed[leaveType] - held[leaveType],
+        );
         paidDays = Math.min(totalDays, av);
         lwpDays = Math.max(0, totalDays - paidDays);
       }
 
       const rd = leaveType === "SL" && totalDays > config.slDocumentThreshold;
-      const mn = [];
-      if (te.primaryManager?.managerId)
-        mn.push({
-          managerId: te.primaryManager.managerId,
-          managerName: te.primaryManager.managerName || "",
-          type: "primary",
-        });
-      if (te.secondaryManager?.managerId)
-        mn.push({
-          managerId: te.secondaryManager.managerId,
-          managerName: te.secondaryManager.managerName || "",
-          type: "secondary",
-        });
+      const mn = approvalChain(te);
       const me = await Employee.findById(myId)
         .select("firstName lastName")
         .lean();
@@ -853,14 +911,14 @@ router.post(
         {
           managerId: myId,
           managerName: mName,
-          type: isP ? "primary" : "secondary",
+          type: "primary",
           decision: "approved",
           remarks: managerRemarks || "On behalf",
           decidedAt: new Date(),
         },
       ];
-      const hasSec = !!te.secondaryManager?.managerId;
-      const st = isP && hasSec ? "manager_approved" : "hr_approved";
+      // The reporting manager's decision is final — there is no second step.
+      const st = "hr_approved";
       const app = await LeaveApplication.create({
         employeeId,
         biometricId: te.biometricId,
@@ -1042,13 +1100,24 @@ router.post("/quick-apply", AllEmployeeAppMiddleware, async (req, res) => {
       istBase.getUTCMonth() + 1,
     ).padStart(2, "0")}-${String(istBase.getUTCDate()).padStart(2, "0")}`;
 
-    // Block duplicate on the same day
-    const dupe = await LeaveApplication.findOne({
+    // Block a second leave on a day that is already covered — by ANY leave,
+    // including one running over several days; the old check matched only a
+    // leave for exactly this one date. The other half of a half day is fine.
+    const covering = await LeaveApplication.find({
       employeeId: req.user.id,
-      fromDate: targetDateStr,
-      toDate: targetDateStr,
+      fromDate: { $lte: targetDateStr },
+      toDate: { $gte: targetDateStr },
       status: { $nin: ["manager_rejected", "hr_rejected", "cancelled"] },
-    });
+    }).lean();
+    const dupe = covering.find(
+      (c) =>
+        !(
+          isHalfDay &&
+          c.isHalfDay &&
+          c.fromDate === c.toDate &&
+          (c.halfDaySlot || "first_half") !== (halfDaySlot || "first_half")
+        ),
+    );
     if (dupe) {
       return res.status(400).json({
         success: false,
@@ -1060,20 +1129,7 @@ router.post("/quick-apply", AllEmployeeAppMiddleware, async (req, res) => {
       });
     }
 
-    const managersNotified = [
-      {
-        managerId: emp.primaryManager.managerId,
-        managerName: emp.primaryManager.managerName || "",
-        type: "primary",
-      },
-    ];
-    if (emp.secondaryManager?.managerId) {
-      managersNotified.push({
-        managerId: emp.secondaryManager.managerId,
-        managerName: emp.secondaryManager.managerName || "",
-        type: "secondary",
-      });
-    }
+    const managersNotified = approvalChain(emp);
 
     const totalDays = isHalfDay ? 0.5 : 1;
 
@@ -1415,7 +1471,7 @@ router.patch(
       return res.json({
         success: true,
         data: app,
-        message: `Classified as ${resolvedType} and approved (no secondary manager assigned).`,
+        message: `Classified as ${resolvedType} and approved.`,
       });
     } catch (err) {
       console.error("[QUICK-RESOLVE]", err);
@@ -1453,15 +1509,35 @@ router.post("/", AllEmployeeAppMiddleware, async (req, res) => {
       applicationDate,
       fromDate,
       toDate,
-      reason,
       isHalfDay,
       halfDaySlot,
     } = req.body;
+    // A reason of spaces is no reason: the manager decides by reading it.
+    const reason =
+      typeof req.body.reason === "string" ? req.body.reason.trim() : "";
 
     if (!leaveType || !applicationDate || !fromDate || !toDate || !reason)
       return res
         .status(400)
         .json({ success: false, message: "All fields required" });
+
+    if (!isDateStr(fromDate) || !isDateStr(toDate)) return badDate(res);
+
+    if (isHalfDay && fromDate !== toDate)
+      return res.status(400).json({
+        success: false,
+        message: "A half day is one date — from and to must be the same day.",
+      });
+
+    if (
+      isHalfDay &&
+      halfDaySlot &&
+      !["first_half", "second_half"].includes(halfDaySlot)
+    )
+      return res.status(400).json({
+        success: false,
+        message: "halfDaySlot must be first_half or second_half",
+      });
 
     if (!["CL", "SL", "PL", "LOP"].includes(leaveType))
       return res
@@ -1487,10 +1563,14 @@ router.post("/", AllEmployeeAppMiddleware, async (req, res) => {
     const year = new Date(fromDate).getFullYear();
 
     const wd = workingDaysSinceJoining(emp.dateOfJoining);
-    if (wd < config.initialWaitingDays)
+    // The waiting period is about PAID leave, an entitlement that has not
+    // started yet. Unpaid leave is no entitlement, and refusing it left a new
+    // joiner who fell ill no way to tell their manager at all — the day was
+    // still an absence, only an unexplained one.
+    if (wd < config.initialWaitingDays && leaveType !== "LOP")
       return res.status(400).json({
         success: false,
-        message: `Complete ${config.initialWaitingDays} working days first. You have ${wd}.`,
+        message: `Paid leave starts after ${config.initialWaitingDays} working days — you have ${wd}. You can still apply for unpaid leave (LOP).`,
         code: "WAITING_PERIOD",
       });
     if (leaveType === "PL" && wd < config.daysRequiredForPL)
@@ -1512,6 +1592,7 @@ router.post("/", AllEmployeeAppMiddleware, async (req, res) => {
       toDate,
       leaveType,
       isHalfDay,
+      halfDaySlot,
     });
     if (overlap.action === "block")
       return overlapBlockResponse(res, overlap.existing);
@@ -1539,19 +1620,7 @@ router.post("/", AllEmployeeAppMiddleware, async (req, res) => {
 
     // ── LOP ──
     if (leaveType === "LOP") {
-      const mn = [];
-      if (emp.primaryManager?.managerId)
-        mn.push({
-          managerId: emp.primaryManager.managerId,
-          managerName: emp.primaryManager.managerName || "",
-          type: "primary",
-        });
-      if (emp.secondaryManager?.managerId)
-        mn.push({
-          managerId: emp.secondaryManager.managerId,
-          managerName: emp.secondaryManager.managerName || "",
-          type: "secondary",
-        });
+      const mn = approvalChain(emp);
 
       const app = await LeaveApplication.create({
         employeeId: req.user.id,
@@ -1615,19 +1684,7 @@ router.post("/", AllEmployeeAppMiddleware, async (req, res) => {
       const lwpDays = Math.max(0, totalDays - paidDays);
       const rd = totalDays > config.slDocumentThreshold;
 
-      const mn = [];
-      if (emp.primaryManager?.managerId)
-        mn.push({
-          managerId: emp.primaryManager.managerId,
-          managerName: emp.primaryManager.managerName || "",
-          type: "primary",
-        });
-      if (emp.secondaryManager?.managerId)
-        mn.push({
-          managerId: emp.secondaryManager.managerId,
-          managerName: emp.secondaryManager.managerName || "",
-          type: "secondary",
-        });
+      const mn = approvalChain(emp);
 
       const app = await LeaveApplication.create({
         employeeId: req.user.id,
@@ -1735,19 +1792,7 @@ router.post("/", AllEmployeeAppMiddleware, async (req, res) => {
     const lwpDays = Math.max(0, totalDays - paidDays);
 
     const rd = false;
-    const mn = [];
-    if (emp.primaryManager?.managerId)
-      mn.push({
-        managerId: emp.primaryManager.managerId,
-        managerName: emp.primaryManager.managerName || "",
-        type: "primary",
-      });
-    if (emp.secondaryManager?.managerId)
-      mn.push({
-        managerId: emp.secondaryManager.managerId,
-        managerName: emp.secondaryManager.managerName || "",
-        type: "secondary",
-      });
+    const mn = approvalChain(emp);
 
     const app = await LeaveApplication.create({
       employeeId: req.user.id,
@@ -1854,6 +1899,16 @@ router.patch("/:id/cancel", AllEmployeeAppMiddleware, async (req, res) => {
         message: `Cannot withdraw — leave is already ${a.status}`,
       });
 
+    // A second tap must not cancel it. It used to fall through to
+    // "cancelled" below: the leave left the manager's queue without their
+    // decision, and the days the approval had deducted never came back.
+    if (a.status === "withdraw_pending")
+      return res.json({
+        success: true,
+        data: a,
+        message: "Your withdrawal request is already with your manager.",
+      });
+
     const wasApproved = a.status === "hr_approved";
 
     if (wasApproved) {
@@ -1870,21 +1925,7 @@ router.patch("/:id/cancel", AllEmployeeAppMiddleware, async (req, res) => {
         const emp = await Employee.findById(a.employeeId)
           .select("primaryManager secondaryManager")
           .lean();
-        const rebuilt = [];
-        if (emp?.primaryManager?.managerId) {
-          rebuilt.push({
-            managerId: emp.primaryManager.managerId,
-            managerName: emp.primaryManager.managerName || "",
-            type: "primary",
-          });
-        }
-        if (emp?.secondaryManager?.managerId) {
-          rebuilt.push({
-            managerId: emp.secondaryManager.managerId,
-            managerName: emp.secondaryManager.managerName || "",
-            type: "secondary",
-          });
-        }
+        const rebuilt = approvalChain(emp);
         if (rebuilt.length === 0) {
           return res.status(400).json({
             success: false,
@@ -2033,35 +2074,130 @@ router.put("/:id", AllEmployeeAppMiddleware, async (req, res) => {
         message:
           "Quick-apply leaves can't be edited. Withdraw and apply again if needed.",
       });
-    const { fromDate, toDate, reason, isHalfDay, halfDaySlot } = req.body;
+    const { fromDate, toDate, isHalfDay, halfDaySlot } = req.body;
+    const reason =
+      typeof req.body.reason === "string" ? req.body.reason.trim() : undefined;
+    if ((fromDate && !isDateStr(fromDate)) || (toDate && !isDateStr(toDate)))
+      return badDate(res);
+    if (reason !== undefined && !reason)
+      return res
+        .status(400)
+        .json({ success: false, message: "A reason is required" });
+    const half = isHalfDay !== undefined ? !!isHalfDay : !!a.isHalfDay;
+    const slot = half ? halfDaySlot || a.halfDaySlot || "first_half" : null;
     const nF = fromDate || a.fromDate,
-      nT = isHalfDay ? nF : toDate || a.toDate;
-    const nt = (isHalfDay !== undefined ? isHalfDay : a.isHalfDay)
-      ? 0.5
-      : countLeaveDays(nF, nT);
+      nT = half ? nF : toDate || a.toDate;
+    if (nT < nF)
+      return res
+        .status(400)
+        .json({ success: false, message: "To date before from date" });
+    const nt = half ? 0.5 : countLeaveDays(nF, nT);
     if (nt <= 0)
       return res.status(400).json({ success: false, message: "No valid days" });
-    const c = await LeaveApplication.findOne({
-      _id: { $ne: req.params.id },
+    const clash = await resolveLeaveOverlap({
       employeeId: req.user.id,
-      status: { $nin: ["hr_rejected", "manager_rejected", "cancelled"] },
-      fromDate: { $lte: nT },
-      toDate: { $gte: nF },
+      fromDate: nF,
+      toDate: nT,
+      leaveType: a.leaveType,
+      isHalfDay: half,
+      halfDaySlot: slot,
+      excludeId: a._id,
     });
-    if (c)
-      return res.status(400).json({
-        success: false,
-        message: `Conflicts with ${c.fromDate}–${c.toDate}`,
-        code: "OVERLAP",
-      });
+    if (clash.action !== "none")
+      return overlapBlockResponse(res, clash.existing);
+
+    // New days are split between paid and unpaid under the same rules as a
+    // new application. The old split used to survive the edit: a one-day CL
+    // stretched to five stayed "1 paid", past the balance and the caps alike.
+    let paidDays = 0,
+      lwpDays = nt;
+    if (["CL", "SL", "PL"].includes(a.leaveType)) {
+      const emp = await Employee.findById(req.user.id)
+        .select("biometricId address")
+        .lean();
+      const config = await LeaveConfig.getConfig();
+      const year = new Date(nF).getFullYear();
+      const bal = await ensureBalance(
+        req.user.id,
+        year,
+        emp?.biometricId,
+        config,
+      );
+      const held = await computeReserved(req.user.id, year);
+      const mine =
+        String(a.fromDate).slice(0, 4) === String(year)
+          ? a.paidDays != null
+            ? a.paidDays
+            : a.totalDays || 0
+          : 0;
+      const heldByOthers = Math.max(0, held[a.leaveType] - mine);
+      const entitled =
+        a.leaveType === "CL"
+          ? config.clPerYear
+          : a.leaveType === "SL"
+            ? config.slPerYear
+            : bal.plEligible
+              ? config.plPerYear
+              : 0;
+      const available = Math.max(
+        0,
+        entitled - bal.consumed[a.leaveType] - heldByOthers,
+      );
+      if (nt > available)
+        return insufficientBalanceResponse(res, {
+          leaveType: a.leaveType,
+          requested: nt,
+          entitled,
+          consumed: bal.consumed[a.leaveType],
+          reserved: heldByOthers,
+        });
+      if (a.leaveType === "SL") {
+        paidDays = nt;
+        lwpDays = 0;
+        a.requiresDocument = nt > config.slDocumentThreshold;
+      } else {
+        let effective = available;
+        if (a.leaveType === "CL") {
+          const { used } = await countMonthlyUsage(
+            req.user.id,
+            nF,
+            "CL",
+            a._id,
+          );
+          effective = Math.min(
+            effective,
+            Math.max(0, (config.maxCLPerMonth || 3) - used),
+          );
+        }
+        const state = (
+          emp?.address?.current?.state ||
+          emp?.address?.permanent?.state ||
+          ""
+        )
+          .toLowerCase()
+          .trim();
+        const cap = ["odisha", "orissa"].includes(state)
+          ? config.maxLeaveDaysPerMonthOdisha || 7
+          : config.maxLeaveDaysPerMonth || 10;
+        const { used: monthUsed } = await countMonthlyUsage(
+          req.user.id,
+          nF,
+          null,
+          a._id,
+        );
+        effective = Math.min(effective, Math.max(0, cap - monthUsed));
+        paidDays = Math.min(nt, effective);
+        lwpDays = Math.max(0, nt - paidDays);
+      }
+    }
     a.fromDate = nF;
     a.toDate = nT;
     a.totalDays = nt;
+    a.paidDays = paidDays;
+    a.lwpDays = lwpDays;
     if (reason !== undefined) a.reason = reason;
-    if (isHalfDay !== undefined) {
-      a.isHalfDay = isHalfDay;
-      a.halfDaySlot = isHalfDay ? halfDaySlot || "first_half" : null;
-    }
+    a.isHalfDay = half;
+    a.halfDaySlot = slot;
     await a.save();
     res.json({ success: true, data: a, message: "Updated" });
   } catch (e) {

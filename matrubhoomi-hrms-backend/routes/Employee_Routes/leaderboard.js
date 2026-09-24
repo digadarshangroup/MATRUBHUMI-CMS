@@ -32,6 +32,7 @@ const router = express.Router();
 const AllEmployeeAppMiddleware = require("../../Middlewear/AllEmployeeAppMiddleware");
 const Employee = require("../../models/Employee");
 const DailyAttendance = require("../../models/HR_Models/Dailyattendance");
+const { activeEmployeeFilter } = require("../../utils/employeeActive");
 
 // Present-ish and on-time sets, consistent with utils/performanceStats.
 const PRESENT = new Set(["P", "P*", "P~", "MP", "WFH", "P/CL", "P/SL", "P/PL", "P/LWP"]);
@@ -136,11 +137,11 @@ router.get("/", AllEmployeeAppMiddleware, async (req, res) => {
       });
     }
 
-    const employees = await Employee.find({
-      biometricId: { $in: [...tally.keys()] },
-      // Ranking people who have left the company would be noise.
-      $or: [{ isActive: true }, { isActive: { $exists: false } }],
-    })
+    // Ranking people who have left the company would be noise — and "left"
+    // is either flag, not only isActive (utils/employeeActive.js).
+    const employees = await Employee.find(
+      activeEmployeeFilter({ biometricId: { $in: [...tally.keys()] } }),
+    )
       .select("firstName middleName lastName biometricId department designation profileImage")
       .lean();
 

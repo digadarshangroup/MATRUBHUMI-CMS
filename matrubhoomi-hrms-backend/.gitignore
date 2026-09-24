@@ -86,3 +86,6 @@ serviceAccount*.json
 *.key
 *.p12
 *.pfx
+
+# MEDIA_STORAGE=local uploads (demo / test machines)
+local-media/

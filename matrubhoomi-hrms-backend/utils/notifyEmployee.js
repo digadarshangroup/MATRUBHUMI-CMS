@@ -186,6 +186,51 @@ function buildOptions(opts) {
  * @param {number} [opts.badge]
  * @returns {void}
  */
+/**
+ * Keep a copy of the notification in each recipient's inbox
+ * (models/EmployeeNotification.js) — what the native employee app reads, since
+ * it cannot receive an Expo push.
+ *
+ * Takes the caller's ORIGINAL options, not buildOptions()'s: that drops any
+ * screen the Expo app does not know, and the native app routes by its own.
+ * A copy identical to one written in the last two minutes is skipped — a few
+ * routes notify through here AND send their own copy of the same event.
+ * Never throws.
+ */
+async function recordInbox(ids, opts) {
+  try {
+    if (!opts?.title || !ids?.length) return;
+    const EmployeeNotification = require("../models/EmployeeNotification");
+    const title = String(opts.title);
+    const kind = String(opts.kind || "general");
+    const refId = opts.id != null ? String(opts.id) : "";
+    const since = new Date(Date.now() - 2 * 60 * 1000);
+    const recent = await EmployeeNotification.find({
+      employeeId: { $in: ids },
+      title,
+      kind,
+      refId,
+      createdAt: { $gte: since },
+    })
+      .select("employeeId")
+      .lean();
+    const already = new Set(recent.map((r) => String(r.employeeId)));
+    const rows = ids
+      .filter((id) => !already.has(String(id)))
+      .map((employeeId) => ({
+        employeeId,
+        title,
+        body: String(opts.body || ""),
+        kind,
+        screen: String(opts.screen || ""),
+        refId,
+      }));
+    if (rows.length) await EmployeeNotification.insertMany(rows, { ordered: false });
+  } catch (e) {
+    console.warn("[NOTIFY] inbox write failed:", e.message);
+  }
+}
+
 function notifyEmployee(recipients, opts) {
   let ids;
   let payload;
@@ -202,6 +247,7 @@ function notifyEmployee(recipients, opts) {
   // Detach from the request lifecycle. Nothing downstream can delay or fail
   // the response that triggered this.
   setImmediate(() => {
+    recordInbox(ids, opts);
     sendExpoPush(ids, payload)
       .then((r) => {
         if (r && (r.mobile?.failed || r.web?.failed)) {
@@ -231,6 +277,7 @@ async function notifyEmployeeNow(recipients, opts) {
     if (ids.length === 0) return empty;
     const payload = buildOptions(opts);
     if (!payload) return empty;
+    await recordInbox(ids, opts);
     return (await sendExpoPush(ids, payload)) || empty;
   } catch (e) {
     console.warn("[NOTIFY] send failed:", e.message);
@@ -243,7 +290,18 @@ async function notifyEmployeeNow(recipients, opts) {
 //  All copy lives here so the app and the CMS never disagree on wording.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const leaveOf = (a) => a?.leaveType || "leave";
+// The words an employee uses, not HR's codes: "your casual leave", never
+// "your CL" — and a one-day leave is "on 14 Oct", not "14 Oct to 14 Oct".
+const LEAVE_WORDS = { CL: "casual leave", SL: "sick leave", PL: "privilege leave", LOP: "unpaid leave", LWP: "unpaid leave", QUICK: "leave" };
+const leaveOf = (a) => {
+  const type = a?.quickApply?.resolvedType || a?.leaveType;
+  const word = LEAVE_WORDS[type] || "leave";
+  return a?.isHalfDay ? `half-day ${word}` : word;
+};
+const leaveDates = (a) =>
+  !a?.toDate || a.fromDate === a.toDate
+    ? `on ${shortDate(a.fromDate)}`
+    : `for ${shortDate(a.fromDate)} to ${shortDate(a.toDate)}`;
 
 /** L1 — employee applied. Goes to the PRIMARY manager only. */
 function notifyLeaveApplied(application, employee) {
@@ -255,7 +313,7 @@ function notifyLeaveApplied(application, employee) {
   const n = a.totalDays != null ? a.totalDays : 1;
   notifyEmployee(to, {
     title: "New leave request",
-    body: `${name} applied for ${n} day(s) ${leaveOf(a)}, ${shortDate(a.fromDate)} to ${shortDate(a.toDate)}.`,
+    body: `${name} applied for ${n === 1 ? "1 day" : `${n} days`} of ${leaveOf(a)} ${leaveDates(a)}.`,
     kind: "leave",
     screen: "Leave",
     id: a._id,
@@ -286,7 +344,7 @@ function notifyLeaveApproved(application) {
   if (!a.employeeId) return;
   notifyEmployee(a.employeeId, {
     title: "Request approved",
-    body: `Your ${leaveOf(a)} for ${shortDate(a.fromDate)} to ${shortDate(a.toDate)} is approved.`,
+    body: `Your ${leaveOf(a)} ${leaveDates(a)} is approved.`,
     kind: "leave",
     screen: "Leave",
     id: a._id,
@@ -300,7 +358,7 @@ function notifyLeaveRejected(application, reason) {
   notifyEmployee(a.employeeId, {
     title: "Request not approved",
     body: withReason(
-      `Your ${leaveOf(a)} for ${shortDate(a.fromDate)} wasn't approved.`,
+      `Your ${leaveOf(a)} ${leaveDates(a)} wasn't approved.`,
       reason || a.rejectionReason,
     ),
     kind: "leave",
@@ -316,7 +374,7 @@ function notifyLeaveWithdrawRequested(application) {
   if (!ids.length) return;
   notifyEmployee(ids, {
     title: "Withdrawal requested",
-    body: `${firstName(a.employeeName)} wants to withdraw their approved ${leaveOf(a)} for ${shortDate(a.fromDate)}.`,
+    body: `${firstName(a.employeeName)} wants to withdraw their approved ${leaveOf(a)} ${leaveDates(a)}.`,
     kind: "leave",
     screen: "Leave",
     id: a._id,
@@ -329,7 +387,7 @@ function notifyLeaveWithdrawn(application) {
   if (!a.employeeId) return;
   notifyEmployee(a.employeeId, {
     title: "Leave withdrawn",
-    body: `Your ${leaveOf(a)} for ${shortDate(a.fromDate)} has been withdrawn and the days returned.`,
+    body: `Your ${leaveOf(a)} ${leaveDates(a)} has been withdrawn and the days returned.`,
     kind: "leave",
     screen: "Leave",
     id: a._id,
@@ -560,6 +618,7 @@ module.exports = {
   // core
   notifyEmployee,
   notifyEmployeeNow,
+  recordInbox,
   // leave
   notifyLeaveApplied,
   notifyLeaveSecondaryPending,

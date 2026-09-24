@@ -64,6 +64,7 @@ cloudinary.config({
 const PRIVATE_TTL_S = Number(process.env.CLOUDINARY_PRIVATE_URL_TTL_S || 300);
 
 function assertConfigured() {
+    if (LOCAL_MODE) return;
     if (
         !process.env.CLOUDINARY_CLOUD_NAME ||
         !process.env.CLOUDINARY_API_KEY ||
@@ -108,6 +109,42 @@ function safePublicId(fileName, folder, keepExtension) {
     return folder ? `${folder}/${base}` : base;
 }
 
+// ── LOCAL mode: the same four calls, on this machine's disk ──────────────────
+//
+// MEDIA_STORAGE=local stores every upload under MEDIA_LOCAL_DIR (default
+// ./local-media) instead of Cloudinary — for a demo or a test run on one
+// machine, which must never write into the company's real media account.
+// Nothing changes for a caller: public images come back as a URL (served by
+// server.js at /media), everything else as the same /api/files/<token> link,
+// and a private asset's id is "local:<path>", which getPrivateFileStream reads
+// from disk. Off unless the variable says otherwise; production is untouched.
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
+
+const LOCAL_MODE = String(process.env.MEDIA_STORAGE || "").toLowerCase() === "local";
+const LOCAL_DIR = path.resolve(process.env.MEDIA_LOCAL_DIR || path.join(__dirname, "..", "local-media"));
+
+function localWrite(buffer, zone, folder, fileName, keepExtension) {
+    const id = safePublicId(fileName, folder, keepExtension).replace(/\.\.+/g, ".");
+    const rel = `${zone}/${id}`;
+    const full = path.join(LOCAL_DIR, rel);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, buffer);
+    return { rel, bytes: buffer.length };
+}
+
+function extFor(mimeType, fileName) {
+    const dot = String(fileName || "").lastIndexOf(".");
+    if (dot > 0) return String(fileName).slice(dot).replace(/[^a-zA-Z0-9.]/g, "");
+    const m = String(mimeType || "").toLowerCase();
+    return m === "image/png" ? ".png" : m === "image/webp" ? ".webp" : m.startsWith("image/") ? ".jpg" : "";
+}
+
+function localPublicUrl(rel, baseUrl) {
+    return `${apiBase(baseUrl)}/media/${rel.replace(/^public\//, "")}`;
+}
+
 // Force a download rather than an inline render, with a sensible filename.
 function attachmentUrl(secureUrl, fileName) {
     if (!secureUrl || !secureUrl.includes("/upload/")) return secureUrl;
@@ -135,8 +172,13 @@ function uploadStream(buffer, options) {
 // ── Public upload, generic (images, voice notes, field-app media) ────────────
 async function uploadToCloudinary(
     buffer,
-    { folder = "matrubhoomi", resourceType = "auto", originalName = "" } = {},
+    { folder = "matrubhoomi", resourceType = "auto", originalName = "", mimeType = "", baseUrl = "" } = {},
 ) {
+    if (LOCAL_MODE) {
+        const name = `${(originalName || "upload").replace(/\.[^.]+$/, "")}${extFor(mimeType, originalName) || ".jpg"}`;
+        const { rel, bytes } = localWrite(buffer, "public", folder, name, true);
+        return { url: localPublicUrl(rel, baseUrl), publicId: `local:${rel}`, type: "image", format: "", bytes, originalName };
+    }
     assertConfigured();
     const result = await uploadStream(buffer, {
         folder,
@@ -185,6 +227,24 @@ async function uploadPublicFile(
 ) {
     assertConfigured();
     const resourceType = resourceTypeFor(mimeType);
+
+    if (LOCAL_MODE) {
+        if (resourceType === "image") {
+            const { rel, bytes } = localWrite(buffer, "public", folder, fileName, true);
+            const url = localPublicUrl(rel, baseUrl);
+            return {
+                fileId: `local:${rel}`, publicId: `local:${rel}`, fileName, resourceType: "image", deliveryType: "upload",
+                url, viewUrl: url, embedUrl: url, downloadUrl: url, mimeType, size: bytes, bytes,
+            };
+        }
+        const { rel, bytes } = localWrite(buffer, "private", folder, fileName, false);
+        const token = mintFileToken({ publicId: `local:${rel}`, resourceType, deliveryType: "private", mimeType, fileName });
+        const proxied = `${apiBase(baseUrl)}/api/files/${token}`;
+        return {
+            fileId: `local:${rel}`, publicId: `local:${rel}`, fileName, resourceType, deliveryType: "private",
+            url: proxied, viewUrl: proxied, embedUrl: proxied, downloadUrl: proxied, mimeType, size: bytes, bytes,
+        };
+    }
 
     // ── Images: straight to the CDN ─────────────────────────────────────────
     if (resourceType === "image") {
@@ -261,6 +321,10 @@ async function uploadPrivateFile(
         folder = "matrubhoomi/private",
     } = {},
 ) {
+    if (LOCAL_MODE) {
+        const { rel, bytes } = localWrite(buffer, "private", folder, fileName, false);
+        return { publicId: `local:${rel}`, fileName, resourceType: resourceTypeFor(mimeType), deliveryType: "private", mimeType, bytes, size: bytes };
+    }
     assertConfigured();
     const resourceType = resourceTypeFor(mimeType);
 
@@ -312,6 +376,16 @@ async function getPrivateFileStream(
     publicId,
     { resourceType = "raw", type = "private" } = {},
 ) {
+    // Written by local mode — read from disk, whatever mode is on now.
+    if (String(publicId || "").startsWith("local:")) {
+        const full = path.join(LOCAL_DIR, String(publicId).slice(6));
+        if (!full.startsWith(LOCAL_DIR) || !fs.existsSync(full)) {
+            const err = new Error("Local file not found");
+            err.statusCode = 404;
+            throw err;
+        }
+        return { stream: fs.createReadStream(full), mimeType: "application/octet-stream", size: fs.statSync(full).size };
+    }
     const doFetch = async () => {
         // Re-signed on the retry too: a signature that expired between the two
         // attempts would turn a transient 500 into a permanent 401.
@@ -344,6 +418,11 @@ async function getPrivateFileStream(
 /** Delete an asset. `type` MUST match how it was uploaded. */
 async function deleteFile(publicId, { resourceType = "raw", type = "private" } = {}) {
     if (!publicId) return { result: "not found" };
+    if (String(publicId).startsWith("local:")) {
+        const full = path.join(LOCAL_DIR, String(publicId).slice(6));
+        if (full.startsWith(LOCAL_DIR) && fs.existsSync(full)) fs.unlinkSync(full);
+        return { result: "ok" };
+    }
     assertConfigured();
     // Destroying a private asset as type "upload" reports { result: "not
     // found" } and silently leaves the file in place, so this is not a detail
@@ -356,6 +435,8 @@ async function deleteFile(publicId, { resourceType = "raw", type = "private" } =
 }
 
 module.exports = {
+    LOCAL_MODE,
+    LOCAL_DIR,
     uploadToCloudinary,
     uploadPublicFile,
     uploadPrivateFile,

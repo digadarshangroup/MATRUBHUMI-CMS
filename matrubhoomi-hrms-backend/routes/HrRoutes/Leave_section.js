@@ -146,6 +146,7 @@ async function resolveLeaveOverlap({
   toDate,
   leaveType,
   isHalfDay,
+  halfDaySlot,
   excludeId,
 }) {
   const q = {
@@ -155,14 +156,28 @@ async function resolveLeaveOverlap({
     toDate: { $gte: fromDate },
   };
   if (excludeId) q._id = { $ne: excludeId };
-  const existing = await LeaveApplication.findOne(q);
-  if (!existing) return { action: "none" };
-  const sameType = String(existing.leaveType) === String(leaveType);
-  const sameRange =
-    existing.fromDate === fromDate && existing.toDate === toDate;
-  const sameHalf = !!existing.isHalfDay === !!isHalfDay;
-  if (sameType && sameRange && sameHalf) return { action: "replace", existing };
-  return { action: "block", existing };
+  // The two halves of one day are two requests, not a duplicate (the same
+  // rule as the employee side, routes/Employee_Routes/leaveRoutes.js).
+  const found = await LeaveApplication.find(q);
+  const slotOf = (half, slot) => (half ? slot || "first_half" : null);
+  const mySlot = slotOf(isHalfDay, halfDaySlot);
+  let replace = null;
+  for (const existing of found) {
+    const theirSlot = slotOf(existing.isHalfDay, existing.halfDaySlot);
+    const sameRange =
+      existing.fromDate === fromDate && existing.toDate === toDate;
+    if (sameRange && mySlot && theirSlot && mySlot !== theirSlot) continue;
+    if (
+      sameRange &&
+      theirSlot === mySlot &&
+      String(existing.leaveType) === String(leaveType)
+    ) {
+      replace = existing;
+      continue;
+    }
+    return { action: "block", existing };
+  }
+  return replace ? { action: "replace", existing: replace } : { action: "none" };
 }
 
 function overlapBlockResponse(res, existing) {
@@ -1159,6 +1174,7 @@ router.post("/add-on-behalf", EmployeeAuthMiddleware, async (req, res) => {
       startDate,
       endDate,
       isHalfDay,
+      halfDaySlot,
       reason,
       hrRemarks,
     } = req.body;
@@ -1200,6 +1216,7 @@ router.post("/add-on-behalf", EmployeeAuthMiddleware, async (req, res) => {
       toDate: toStr,
       leaveType,
       isHalfDay,
+      halfDaySlot,
     });
     if (overlap.action === "block")
       return overlapBlockResponse(res, overlap.existing);
@@ -1228,6 +1245,7 @@ router.post("/add-on-behalf", EmployeeAuthMiddleware, async (req, res) => {
       fromDate: startDate,
       toDate: endDate,
       isHalfDay: isHalfDay || false,
+      halfDaySlot: isHalfDay ? halfDaySlot || "first_half" : null,
       numberOfDays: days,
       totalDays: days,
       reason,

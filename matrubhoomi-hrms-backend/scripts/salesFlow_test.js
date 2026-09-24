@@ -91,6 +91,9 @@ async function call(method, path, token, body) {
 
 (async () => {
   await mongoose.connect(process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/sales_scratch");
+  // Unique indexes a freshly booted server may still be building — see the
+  // helper's header for the flake this removed.
+  await require("./_waitForIndexes")(mongoose);
   const Employee = require("../models/Employee");
 
   // A field employee to act as.

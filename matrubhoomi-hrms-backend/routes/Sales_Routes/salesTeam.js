@@ -22,31 +22,26 @@ const AccessDepartment = require("../../models/Access/AccessDepartment");
 const FieldDay = require("../../models/Sales_Models/FieldDay");
 const FieldLocationPing = require("../../models/Sales_Models/FieldLocationPing");
 const SalesTask = require("../../models/Sales_Models/SalesTask");
-const { dayKey, haversine } = require("../../services/fieldTracking");
-const { describeMany } = require("../../services/reverseGeocode");
+const {
+  dayKey, haversine, presentState, placeStillTrue, timelineOf, kindOf, scheduleNaming,
+} = require("../../services/fieldTracking");
+const { describeMany, cacheKey } = require("../../services/reverseGeocode");
+const GeoPlace = require("../../models/Sales_Models/GeoPlace");
+const { salesEmployeeFilter } = require("../../services/fieldAccess");
+const { isEmployeeActive } = require("../../utils/employeeActive");
 const { deskRead, deskApprove, sendError } = require("./_deskAuth");
 
-/**
- * The people this desk assigns work to.
- *
- * Two ways in, unioned: the ACCESS grant (they can sign into Sales) and the HR
- * department label. They disagree in practice — a new joiner labelled Sales by
- * HR before anybody granted them app access, and vice versa — and a desk that
- * cannot see somebody cannot give them work, which is the worse failure.
- */
-async function salesEmployeeFilter() {
-  const dept = await AccessDepartment.findOne({ key: "sales" }).select("_id").lean();
-  const or = [{ department: /sales/i }];
-  if (dept) {
-    or.push({ accessDepartmentId: dept._id }, { additionalDepartmentIds: dept._id });
-  }
-  return { isActive: true, status: { $ne: "inactive" }, $or: or };
-}
+// The people this desk assigns work to are decided by ONE rule, shared with
+// what the employee app offers them and what /api/field accepts from them —
+// services/fieldAccess.js. It used to live here, and a copy of it deciding who
+// is tracked cannot be allowed to drift from the copy deciding who is shown.
+
+const fullNameOf = (e) => [e.firstName, e.middleName, e.lastName].filter(Boolean).join(" ").trim();
 
 router.get("/", deskRead, async (req, res) => {
   try {
     const rows = await Employee.find(await salesEmployeeFilter())
-      .select("firstName middleName lastName biometricId phone designation department profilePicture")
+      .select("firstName middleName lastName biometricId phone designation department profilePhoto")
       .sort({ firstName: 1 })
       .lean();
 
@@ -54,12 +49,14 @@ router.get("/", deskRead, async (req, res) => {
       success: true,
       data: rows.map((e) => ({
         id: String(e._id),
-        name: [e.firstName, e.middleName, e.lastName].filter(Boolean).join(" ").trim(),
+        name: fullNameOf(e),
         code: e.biometricId || "",
         phone: e.phone || "",
         designation: e.designation || "",
         department: e.department || "",
-        photo: e.profilePicture || "",
+        // `profilePhoto.url` — the field this read, `profilePicture`, does not
+        // exist, so every photo on the board was blank.
+        photo: e.profilePhoto?.url || "",
       })),
     });
   } catch (err) {
@@ -69,28 +66,79 @@ router.get("/", deskRead, async (req, res) => {
 
 /* ── Where everybody is ───────────────────────────────────────────── */
 
+/**
+ * One row per person out today — where they are, what they are doing, and
+ * what that place is called.
+ *
+ * `state` is read from the rollup by services/fieldTracking.js presentState():
+ * stopped (with since / minutes), moving (with km/h), off_duty or
+ * not_reporting. The place is the name the ingest already stored; only a row
+ * with none is looked up here, within a small budget, so the board is never
+ * held up by the geocoder.
+ *
+ * For TODAY the field staff who have not started yet are listed too, as
+ * `not_started` — "who is not out yet" is as much the desk's question as
+ * "where is everybody".
+ */
 router.get("/live", deskRead, async (req, res) => {
   try {
     const day = req.query.day || dayKey(new Date());
+    const isToday = day === dayKey(new Date());
 
-    const [days, tasks] = await Promise.all([
+    const [days, tasks, roster] = await Promise.all([
       FieldDay.find({ day }).select("-path").lean(),
       SalesTask.aggregate([
         { $match: { isActive: true, status: { $in: ["assigned", "accepted", "in_progress", "pending_approval", "rework"] } } },
         { $group: { _id: "$assignedTo", open: { $sum: 1 }, done: { $sum: "$doneCount" } } },
       ]),
+      isToday
+        ? Employee.find(await salesEmployeeFilter())
+          .select("firstName middleName lastName biometricId profilePhoto")
+          .lean()
+        : Promise.resolve([]),
     ]);
 
     const taskByEmp = new Map(tasks.map((t) => [String(t._id), t]));
-    const staleAfter = Number(process.env.FIELD_STALE_MINUTES || 15) * 60 * 1000;
 
-    res.json({
-      success: true,
-      day,
-      data: days.map((d) => ({
+    // Who on the board has since left the company — their day stays readable,
+    // but it is marked, not presented as somebody still out working.
+    const ids = days.map((d) => d.employeeId);
+    const people = await Employee.find({ _id: { $in: ids } })
+      .select("isActive status profilePhoto")
+      .lean();
+    const personById = new Map(people.map((p) => [String(p._id), p]));
+
+    // Rows the naming pass has not reached yet: whatever the place cache already
+    // knows is used now, and a naming pass is queued for the rest — so this
+    // board, which refreshes every 45 seconds, never waits on the geocoder, and
+    // the next refresh has the name.
+    // "Has no name" includes a name left over from somewhere the phone has
+    // since driven away from — see placeStillTrue().
+    const needName = days.filter((d) => d.lastLat != null && !placeStillTrue(d) && !d.stay?.place);
+    const lateName = new Map();
+    if (needName.length) {
+      const keys = needName.map((d) => cacheKey(d.lastLat, d.lastLng));
+      const cached = await GeoPlace.find({ key: { $in: keys } }).lean();
+      const byKey = new Map(cached.map((g) => [g.key, g]));
+      needName.forEach((d, i) => {
+        const g = byKey.get(keys[i]);
+        if (g) lateName.set(String(d._id), { name: g.name, locality: g.locality, district: g.district });
+        else if (day === dayKey(new Date())) scheduleNaming(d.employeeId, day);
+      });
+    }
+
+    const rows = days.map((d) => {
+      const now = presentState(d);
+      const extra = lateName.get(String(d._id));
+      const person = personById.get(String(d.employeeId));
+      const stays = (d.stops || []).filter((s) => kindOf(s) === "stay");
+      const lastStop = stays[stays.length - 1] || null;
+      return {
         employeeId: String(d.employeeId),
         name: d.employeeName,
         code: d.employeeCode,
+        photo: person?.profilePhoto?.url || "",
+        inactive: person ? !isEmployeeActive(person) : false,
         lat: d.lastLat,
         lng: d.lastLng,
         accuracy: d.lastAccuracy,
@@ -99,16 +147,59 @@ router.get("/live", deskRead, async (req, res) => {
         lastSeenAt: d.lastPingAt,
         // A phone with no signal and a phone switched off look identical from
         // here, so the board says "not reporting" and lets a human decide which.
-        reporting: d.lastPingAt ? Date.now() - new Date(d.lastPingAt).getTime() < staleAfter : false,
+        reporting: Boolean(now.reporting),
+        state: now.state,
+        since: now.since || null,
+        stoppedMinutes: now.state === "stopped" ? now.minutes : null,
+        speedKmh: now.state === "moving" ? now.speedKmh : null,
+        place: now.place || extra?.name || "",
+        locality: now.locality || extra?.locality || "",
+        district: now.district || extra?.district || "",
+        dutyOn: d.dutyOn === true,
+        dutyStartedAt: d.dutyStartedAt || null,
+        dutyEndedAt: d.dutyEndedAt || null,
+        lastStop: lastStop
+          ? {
+              place: lastStop.locality || lastStop.place || "",
+              minutes: lastStop.minutes || 0,
+              leftAt: lastStop.leftAt || null,
+            }
+          : null,
         distanceKm: Math.round((d.distanceMeters || 0) / 100) / 10,
         movingMinutes: Math.round((d.movingSeconds || 0) / 60),
         idleMinutes: Math.round((d.idleSeconds || 0) / 60),
-        stops: (d.stops || []).length,
+        stops: stays.length,
         submissions: d.submissionCount || 0,
         leadsCreated: d.leadsCreated || 0,
         openTasks: taskByEmp.get(String(d.employeeId))?.open || 0,
-      })),
+      };
     });
+
+    const out = new Set(rows.map((r) => r.employeeId));
+    for (const e of roster) {
+      if (out.has(String(e._id))) continue;
+      rows.push({
+        employeeId: String(e._id),
+        name: fullNameOf(e),
+        code: e.biometricId || "",
+        photo: e.profilePhoto?.url || "",
+        inactive: false,
+        lat: null,
+        lng: null,
+        reporting: false,
+        state: "not_started",
+        distanceKm: 0,
+        movingMinutes: 0,
+        idleMinutes: 0,
+        stops: 0,
+        submissions: 0,
+        leadsCreated: 0,
+        dutyOn: false,
+        openTasks: taskByEmp.get(String(e._id))?.open || 0,
+      });
+    }
+
+    res.json({ success: true, day, data: rows });
   } catch (err) {
     sendError(res, err, "sales-team");
   }
@@ -137,6 +228,22 @@ router.get("/:employeeId/day", deskRead, async (req, res) => {
         .lean();
     }
 
+    // The day as a sentence per stop — "stayed in Kalmeshwar 10:42–11:27,
+    // 45 min, recorded Ramesh Kumar" — with the travel between stops. Names the
+    // naming pass has not reached yet are looked up here within a small budget;
+    // the rest simply arrive on the next refresh.
+    const timeline = timelineOf(row);
+    const unnamed = timeline.entries.filter((e) => !e.place && !e.locality);
+    if (unnamed.length) {
+      const names = await describeMany(unnamed.map((e) => ({ lat: e.lat, lng: e.lng })));
+      unnamed.forEach((e, i) => {
+        e.place = names[i]?.name || "";
+        e.locality = names[i]?.locality || "";
+        e.district = names[i]?.district || "";
+      });
+      if (day === dayKey(new Date())) scheduleNaming(req.params.employeeId, day);
+    }
+
     res.json({
       success: true,
       day,
@@ -145,6 +252,12 @@ router.get("/:employeeId/day", deskRead, async (req, res) => {
         distanceKm: Math.round((row.distanceMeters || 0) / 100) / 10,
         movingMinutes: Math.round((row.movingSeconds || 0) / 60),
         idleMinutes: Math.round((row.idleSeconds || 0) / 60),
+        // `submissions` is what the page reads; the stored field is
+        // `submissionCount`, so the visit count never appeared.
+        submissions: row.submissionCount || 0,
+        now: presentState(row),
+        timeline: timeline.entries,
+        legs: timeline.legs,
         raw,
       },
     });
@@ -250,9 +363,13 @@ router.get("/:employeeId/itinerary", deskRead, async (req, res) => {
     /* The one-line version. Consecutive repeats collapsed — a route that stays
        on one road for twenty kilometres should say its name once, not four
        times. */
+    //
+    // By VILLAGE where one is known — "Kalmeshwar → Katol → Nagpur" is the
+    // sentence the desk reads. The road names and the farmers visited are in
+    // the expanded list, one row per point.
     const chain = [];
     for (const leg of legs) {
-      const place = leg.place;
+      const place = leg.locality || leg.place;
       if (!place) continue;
       if (chain[chain.length - 1] === place) continue;
       chain.push(place);

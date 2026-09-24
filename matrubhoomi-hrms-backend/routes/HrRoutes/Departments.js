@@ -269,11 +269,11 @@ router.put("/:id/managers", EmployeeAuthMiddleware, async (req, res) => {
       });
     }
     const { id } = req.params;
-    const {
-      primaryManagerId,
-      secondaryManagerId,
-      applyToExisting = true,
-    } = req.body;
+    // ONE department manager (services/approvalChain.js). A secondaryManagerId
+    // from an older screen is ignored: nobody's approval waits on a second
+    // manager any more, so none is stored or propagated.
+    const { primaryManagerId, applyToExisting = true } = req.body;
+    const secondaryManagerId = null;
 
     const department = await Department.findById(id);
     if (!department) {
@@ -315,7 +315,9 @@ router.put("/:id/managers", EmployeeAuthMiddleware, async (req, res) => {
       managerName: "",
       designation: "",
     };
-    department.secondaryManager = secondary || {
+    // Cleared rather than left behind: a department still naming a second
+    // manager would suggest to HR that the person has a say they no longer do.
+    department.secondaryManager = {
       managerId: null,
       managerName: "",
       designation: "",

@@ -10,6 +10,35 @@ const {
   invalidateAppAccess,
 } = require("../../Middlewear/AllEmployeeAppMiddleware");
 const {
+  invalidateFieldEmployee,
+} = require("../../Middlewear/FieldEmployeeContext");
+
+/**
+ * Drop every cached answer about what this employee may do in the app.
+ *
+ * Both app guards cache per employee for five minutes. Called after ANY HR
+ * write rather than only the ones that obviously matter: deactivation must
+ * sign somebody out now, a department move decides whether they are field
+ * staff (and so whether they are tracked at all), and a missed case here is a
+ * five-minute window in which a fired employee's phone keeps reporting.
+ */
+function forgetCachedAccess(employeeId) {
+  invalidateAppAccess(employeeId);
+  invalidateFieldEmployee(employeeId);
+}
+
+/**
+ * Somebody switched off mid-shift: close their open field duty as well, or
+ * the sales desk shows them on duty until midnight (see endDutyForLeaver).
+ * Never allowed to fail the HR action that triggered it.
+ */
+function closeFieldDutyIfLeft(emp) {
+  if (!emp || require("../../utils/employeeActive").isEmployeeActive(emp)) return;
+  require("../../services/fieldTracking")
+    .endDutyForLeaver(emp._id)
+    .catch((e) => console.warn("[employee] closing field duty:", e.message));
+}
+const {
   missingRequired,
   requiredFieldsError,
 } = require("../../services/employeeValidation");
@@ -273,40 +302,25 @@ router.post("/", EmployeeAuthMiddlewear, async (req, res) => {
     if (employeeData.primaryManager && !employeeData.primaryManager.managerId) {
       delete employeeData.primaryManager;
     }
-    if (
-      employeeData.secondaryManager &&
-      !employeeData.secondaryManager.managerId
-    ) {
-      delete employeeData.secondaryManager;
-    }
+    // ONE reporting manager (services/approvalChain.js). A secondary manager
+    // is no longer part of any approval, so none is stored for new people.
+    delete employeeData.secondaryManager;
 
-    // ── Inherit the department's managers ─────────────────────────────────
-    // If the form didn't pick managers explicitly, a new employee reports to
-    // whoever is assigned as the department's primary/secondary manager (set
-    // from the Departments page). Explicit picks in the form always win.
-    if (
-      employeeData.departmentId &&
-      (!employeeData.primaryManager || !employeeData.secondaryManager)
-    ) {
+    // ── Inherit the department's manager ──────────────────────────────────
+    // If the form didn't pick a manager explicitly, a new employee reports to
+    // whoever is assigned as the department's manager (set from the
+    // Departments page). An explicit pick in the form always wins.
+    if (employeeData.departmentId && !employeeData.primaryManager) {
       try {
         const Department = require("../../models/HR_Models/Departments");
         const dept = await Department.findById(employeeData.departmentId)
-          .select("primaryManager secondaryManager")
+          .select("primaryManager")
           .lean();
         if (dept) {
           if (!employeeData.primaryManager && dept.primaryManager?.managerId) {
             employeeData.primaryManager = {
               managerId: dept.primaryManager.managerId,
               managerName: dept.primaryManager.managerName || "",
-            };
-          }
-          if (
-            !employeeData.secondaryManager &&
-            dept.secondaryManager?.managerId
-          ) {
-            employeeData.secondaryManager = {
-              managerId: dept.secondaryManager.managerId,
-              managerName: dept.secondaryManager.managerName || "",
             };
           }
         }
@@ -574,9 +588,8 @@ router.put("/:id", EmployeeAuthMiddlewear, async (req, res) => {
     if (updateData.primaryManager && !updateData.primaryManager.managerId) {
       delete updateData.primaryManager;
     }
-    if (updateData.secondaryManager && !updateData.secondaryManager.managerId) {
-      delete updateData.secondaryManager;
-    }
+    // One reporting manager — a secondary is never written any more.
+    delete updateData.secondaryManager;
 
     // Recalculate all salary fields from gross using current config rates,
     // then encrypt the result before it goes into MongoDB
@@ -610,14 +623,11 @@ router.put("/:id", EmployeeAuthMiddlewear, async (req, res) => {
         .json({ success: false, message: "Employee not found" });
 
     // App access is cached for five minutes per employee. Moving somebody to
-    // or from intern changes whether they may use the app at all, so the
-    // stale answer is dropped here instead of being served for another five.
-    if (
-      updateData.employmentType !== undefined &&
-      updateData.employmentType !== beforeDoc?.employmentType
-    ) {
-      invalidateAppAccess(id);
-    }
+    // or from intern, switching them off, or moving them in or out of Sales
+    // all change what the app lets them do, so the stale answer is dropped
+    // here instead of being served for another five.
+    forgetCachedAccess(id);
+    closeFieldDutyIfLeft(updated);
 
     // Decrypt salary before sending to client
     const decryptedDoc = decryptEmployeeDoc(updated);
@@ -964,8 +974,8 @@ router.patch("/bulk-update", EmployeeAuthMiddlewear, async (req, res) => {
       delete clean.departmentId;
     if (clean.primaryManager && !clean.primaryManager.managerId)
       delete clean.primaryManager;
-    if (clean.secondaryManager && !clean.secondaryManager.managerId)
-      delete clean.secondaryManager;
+    // One reporting manager — a secondary is never written any more.
+    delete clean.secondaryManager;
     if (!Object.keys(clean).length) {
       return res.status(400).json({
         success: false,
@@ -1020,10 +1030,11 @@ router.patch("/bulk-update", EmployeeAuthMiddlewear, async (req, res) => {
         doc.set("updatedByName", user.name || "");
         // pre-save hook recalculates + re-encrypts salary and stamps updatedAt
         await doc.save();
-        // Same reason as the single-employee update: a change of employment
-        // type changes whether the app will let them in, and the answer is
-        // cached for five minutes.
-        if (doc.employmentType !== beforeType) invalidateAppAccess(doc._id);
+        // Same reason as the single-employee update: bulk edit can change
+        // employment type, status and department, each of which changes what
+        // the app lets them do, and the answer is cached for five minutes.
+        forgetCachedAccess(doc._id);
+        closeFieldDutyIfLeft(doc);
 
         const name = `${doc.firstName || ""} ${doc.lastName || ""}`.trim();
         recordChange(req, {
@@ -1482,6 +1493,21 @@ router.delete("/:id", EmployeeAuthMiddlewear, async (req, res) => {
         .status(404)
         .json({ success: false, message: "Employee not found" });
 
+    // Signed out of the app NOW, not when the cached "still employed" answer
+    // runs out: the next request from their phone is refused, which stops the
+    // location recording and returns the app to its sign-in screen.
+    forgetCachedAccess(req.params.id);
+    closeFieldDutyIfLeft(employee);
+
+    // Their reports still name them as manager, so leave and attendance
+    // corrections filed from now on would wait on somebody who has gone. Said
+    // in the response so HR can reassign them rather than find out from a
+    // stuck request a week later.
+    const stillReporting = await Employee.countDocuments({
+      isActive: { $ne: false },
+      "primaryManager.managerId": employee._id,
+    });
+
     // Audit: who deactivated this employee.
     recordChange(req, {
       departmentSlug: "hr",
@@ -1494,9 +1520,14 @@ router.delete("/:id", EmployeeAuthMiddlewear, async (req, res) => {
       after: { status: "inactive" },
     });
 
-    res
-      .status(200)
-      .json({ success: true, message: "Employee deactivated successfully" });
+    res.status(200).json({
+      success: true,
+      message:
+        stillReporting > 0
+          ? `Employee deactivated. ${stillReporting} employee${stillReporting === 1 ? " still reports" : "s still report"} to them — give ${stillReporting === 1 ? "that person" : "them"} a new reporting manager.`
+          : "Employee deactivated successfully",
+      data: { reportsToReassign: stillReporting },
+    });
   } catch (error) {
     console.error("Delete employee error:", error);
     if (error.name === "CastError")

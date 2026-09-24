@@ -372,6 +372,9 @@ app.use("/api/employees/import-export", require("./routes/HrRoutes/employeeImpor
 app.use("/api/hr", require("./routes/HrRoutes/HrProfile-Section"));
 app.use("/api/hr/overview", require("./routes/HrRoutes/Overview-Section"));
 app.use("/api/hr/app", require("./routes/HrRoutes/Appversionroutes"));
+// Announcements to the workforce, delivered through the app inbox. The same
+// router serves the executive office below.
+app.use("/api/hr/announcements", require("./routes/HrRoutes/Announcements"));
 app.use("/api/hr/departments", require("./routes/HrRoutes/Departments"));
 app.use("/api/hr/job-postings", require("./routes/HrRoutes/JobPosting_Section"));
 app.use("/api/hr/candidates", require("./routes/HrRoutes/Candidates_section"));
@@ -401,11 +404,24 @@ app.use("/hr/attendance", attendanceRouter);
 // silently never worked. Plain VAPID Web Push — no Firebase.
 app.use("/api/cms/notifications", require("./routes/notifications"));
 
+// Local media (MEDIA_STORAGE=local — a demo or test machine; see
+// services/mediaUpload.service.js). Only the PUBLIC half is served here;
+// private files still go through /api/files/<token>.
+{
+  const { LOCAL_MODE, LOCAL_DIR } = require("./services/mediaUpload.service");
+  if (LOCAL_MODE) {
+    app.use("/media", express.static(require("path").join(LOCAL_DIR, "public"), { fallthrough: false, maxAge: "1d" }));
+    console.log(`[media] LOCAL storage on — uploads are written to ${LOCAL_DIR}`);
+  }
+}
+
 /* ─── Executive office ────────────────────────────────────────────────── */
 
 // The CEO side is deliberately small: the HR overview, and Access Control
 // (mounted above under /api/admin). Nothing else is exposed here.
 app.use("/api/ceo/hr", require("./routes/CEO_Routes/hr"));
+app.use("/api/ceo/overview", require("./routes/CEO_Routes/overview"));
+app.use("/api/ceo/announcements", require("./routes/HrRoutes/Announcements"));
 
 /* ─── Sales ───────────────────────────────────────────────────────────── */
 
@@ -476,6 +492,10 @@ app.use("/api/employee/absence-calendar", require("./routes/Employee_Routes/abse
 const overtimeRoutes = require("./routes/Employee_Routes/Overtimeroutes");
 app.use("/api/employee/overtime", overtimeRoutes);
 
+// The native employee app's inbox (every notifyEmployee() is also kept here,
+// because the app cannot receive an Expo push) and its approval badge counts.
+app.use("/api/employee", require("./routes/Employee_Routes/appInbox"));
+
 /* ─── Health and root ─────────────────────────────────────────────────── */
 
 app.get("/api/health", (req, res) => {
@@ -535,6 +555,21 @@ require("node-cron").schedule(
     require("./services/salesTasks")
       .closeOutOverdue()
       .catch((err) => console.error("[sales] close-out failed:", err.message));
+
+    // Yesterday's field days, closed the same night: a stay still open at
+    // midnight ended at its last fix, and a duty nobody switched off ended at
+    // the day's last fix — and THAT day's field attendance is filed for the
+    // manager exactly as if the salesperson had ended duty themselves.
+    (async () => {
+      const tracking = require("./services/fieldTracking");
+      const { fileFieldAttendance } = require("./services/fieldAttendance");
+      const yesterday = tracking.dayKey(new Date(Date.now() - 24 * 60 * 60 * 1000));
+      const closed = await tracking.closeDay(yesterday);
+      for (const c of closed.filter((x) => x.dutyClosed)) {
+        await fileFieldAttendance({ employeeId: c.employeeId, day: yesterday });
+      }
+      if (closed.length) console.log(`[field] closed ${closed.length} open day(s) for ${yesterday}`);
+    })().catch((err) => console.error("[field] day close-out failed:", err.message));
   },
   { timezone: process.env.FIELD_TIMEZONE || "Asia/Kolkata" },
 );

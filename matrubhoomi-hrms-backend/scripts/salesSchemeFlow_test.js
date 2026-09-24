@@ -64,6 +64,9 @@ const field = (key, label, type, extra = {}) => ({ key, label, type, order: 10, 
 
 (async () => {
   await mongoose.connect(process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/sales_scratch");
+  // The idempotency cases below depend on unique indexes a freshly booted
+  // server may still be building — see the helper's header.
+  await require("./_waitForIndexes")(mongoose);
   const Employee = require("../models/Employee");
   const DepartmentRole = require("../models/Access/DepartmentRole");
 

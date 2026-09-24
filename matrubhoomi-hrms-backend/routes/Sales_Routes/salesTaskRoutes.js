@@ -15,6 +15,7 @@ const SalesLead = require("../../models/Sales_Models/SalesLead");
 const SalesEvent = require("../../models/Sales_Models/SalesEvent");
 const Employee = require("../../models/Employee");
 const { createAssignment } = require("../../services/salesTasks");
+const { notifyTasksAssigned, notifyTaskCancelled } = require("../../services/salesNotify");
 const { deskRead, deskWrite, actorFrom, sendError } = require("./_deskAuth");
 
 /* ── The board ────────────────────────────────────────────────────── */
@@ -130,6 +131,9 @@ router.get("/:id", deskRead, async (req, res) => {
 router.post("/", deskWrite, async (req, res) => {
   try {
     const { assignmentId, tasks } = await createAssignment({ actor: actorFrom(req), payload: req.body });
+
+    // Into each employee's inbox, which the app reads — it holds no socket.
+    notifyTasksAssigned(tasks);
 
     // Wake the phones now rather than at the next poll. Sockets are best-effort
     // by construction — a phone in a field has no socket — so the app also
@@ -294,6 +298,7 @@ router.post("/:id/cancel", deskWrite, async (req, res) => {
     task.completedAt = new Date();
     await task.save();
 
+    notifyTaskCancelled(task);
     const io = req.app.get("io");
     if (io) io.to(`employee-${task.assignedTo}`).emit("sales:task_cancelled", { taskId: String(task._id) });
 

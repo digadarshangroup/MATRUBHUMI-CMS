@@ -56,11 +56,27 @@
 const express = require("express");
 const router = express.Router();
 
+// A malformed id is "not found", never a 500 carrying Mongoose's cast error.
+router.param("id", (req, res, next, id) => {
+  if (!require("mongoose").Types.ObjectId.isValid(id))
+    return res.status(404).json({ success: false, message: "Not found" });
+  next();
+});
+
+/** A real calendar date — the regex alone lets 30 February through. */
+function isRealDate(s) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(s || ""))) return false;
+  const [y, m, d] = String(s).split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
 const AllEmployeeAppMiddleware = require("../../Middlewear/AllEmployeeAppMiddleware");
 const Employee = require("../../models/Employee");
 const DailyAttendance = require("../../models/HR_Models/Dailyattendance");
 const { RegularizationRequest } = require("../../models/HR_Models/LeaveManagement");
 const { notifyEmployee } = require("../../utils/notifyEmployee");
+const { createRegularization } = require("../../services/regularizationFiling");
 
 const TYPES = ["miss_punch", "wrong_status", "forgot_punch", "client_visit", "other"];
 
@@ -122,6 +138,17 @@ function notify(recipientIds, payload) {
     id: data.id,
     channelId,
     categoryId,
+  });
+}
+
+/** "24 Sep" from "2026-09-24" — what a person reads, not what the rows key by. */
+function dayWords(dateStr) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateStr || ""));
+  if (!m) return String(dateStr || "");
+  return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).toLocaleDateString("en-IN", {
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
   });
 }
 
@@ -324,9 +351,14 @@ router.patch(
       }
       await r.save();
 
+      // A field day the app filed is not a "correction" the employee asked
+      // for — it is their day being confirmed, and said as such.
+      const fieldDay = r.source === "field_duty";
       notify(r.employeeId, {
-        title: "Request approved",
-        body: `Your attendance for ${r.dateStr} has been corrected.`,
+        title: fieldDay ? "Field day confirmed" : "Request approved",
+        body: fieldDay
+          ? `${firstNameOf(mgr?.managerName) || "Your manager"} confirmed your field day on ${dayWords(r.dateStr)}. It is on your attendance now.`
+          : `Your attendance for ${dayWords(r.dateStr)} has been corrected.`,
         data: pushData(r),
         channelId: "general",
         categoryId: "general",
@@ -396,7 +428,7 @@ router.patch(
 
       notify(r.employeeId, {
         title: "Request not approved",
-        body: `Your correction request for ${r.dateStr} wasn't approved.${
+        body: `${r.source === "field_duty" ? "Your field day" : "Your correction request"} for ${dayWords(r.dateStr)} wasn't approved.${
           rejectionReason ? ` ${rejectionReason}` : ""
         }`,
         data: pushData(r),
@@ -431,7 +463,7 @@ router.post("/", AllEmployeeAppMiddleware, async (req, res) => {
 
     // Validate before touching the database, and name the specific problem —
     // "Invalid request" tells the employee nothing about how to fix it.
-    if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(String(dateStr))) {
+    if (!dateStr || !isRealDate(dateStr)) {
       return res
         .status(400)
         .json({ success: false, message: "Pick a date to regularize." });
@@ -513,122 +545,53 @@ router.post("/", AllEmployeeAppMiddleware, async (req, res) => {
 
     const emp = await Employee.findById(employeeId)
       .select(
-        "firstName middleName lastName biometricId department designation primaryManager secondaryManager",
+        "firstName middleName lastName biometricId department designation primaryManager dateOfJoining",
       )
       .lean();
     if (!emp) {
       return res.status(404).json({ success: false, message: "Employee not found" });
     }
 
-    // Without managersNotified nobody can ever see the request — every manager
-    // queue in this codebase keys off managersNotified.managerId.
-    const mn = [];
-    if (emp.primaryManager?.managerId)
-      mn.push({
-        managerId: emp.primaryManager.managerId,
-        managerName: emp.primaryManager.managerName || "",
-        type: "primary",
-      });
-    if (emp.secondaryManager?.managerId)
-      mn.push({
-        managerId: emp.secondaryManager.managerId,
-        managerName: emp.secondaryManager.managerName || "",
-        type: "secondary",
-      });
-    if (mn.length === 0)
+    // Nothing can have gone wrong with a punch before the first day at work.
+    const joined = emp.dateOfJoining
+      ? new Date(new Date(emp.dateOfJoining).getTime() + 5.5 * 3600 * 1000)
+          .toISOString()
+          .slice(0, 10)
+      : null;
+    if (joined && dateStr < joined) {
       return res.status(400).json({
         success: false,
-        code: "NO_MANAGER",
-        message: "No manager is assigned to you yet. Ask HR to set one.",
-      });
-
-    // One open request per date. Without this an employee can file the same
-    // day repeatedly and flood their manager's queue.
-    const existing = await RegularizationRequest.findOne({
-      employeeId,
-      dateStr,
-      status: { $in: OPEN_STATUSES },
-    }).lean();
-    if (existing) {
-      return res.status(409).json({
-        success: false,
-        message: "You already have a request open for that date.",
+        code: "BEFORE_JOINING",
+        message: `That is before you joined (${joined}).`,
       });
     }
 
-    const bid = String(emp.biometricId || "").toUpperCase();
-
-    // Freeze what the day looked like before the correction, so the CMS can
-    // show a before/after and an audit can tell what actually changed. A
-    // missing day doc is not a reason to block the submit.
-    const snap = {
-      inTime: null,
-      finalOut: null,
-      systemPrediction: null,
-      hrFinalStatus: null,
-      netWorkMins: 0,
-      lateMins: 0,
-      otMins: 0,
-      punchCount: 0,
-      rawPunches: [],
-    };
+    // The manager chain, the one-open-request rule, the frozen before-picture
+    // and the notification all live in services/regularizationFiling.js — the
+    // same code files a salesperson's day when they end duty in the app.
+    let doc;
     try {
-      const dayDoc = await DailyAttendance.findOne({ dateStr }).lean();
-      const entry = (dayDoc?.employees || []).find(
-        (e) => e.biometricId === bid,
-      );
-      if (entry) {
-        snap.inTime = entry.inTime || null;
-        snap.finalOut = entry.finalOut || null;
-        snap.systemPrediction = entry.systemPrediction || null;
-        snap.hrFinalStatus = entry.hrFinalStatus || null;
-        snap.netWorkMins = entry.netWorkMins || 0;
-        snap.lateMins = entry.lateMins || 0;
-        snap.otMins = entry.otMins || 0;
-        snap.punchCount = entry.punchCount || 0;
-        snap.rawPunches = entry.rawPunches || [];
-      }
-    } catch (e) {
-      console.warn("[REG-SNAPSHOT]", e.message);
-    }
-
-    // "HH:mm" is materialised onto the day in IST here, once, so nothing
-    // downstream has to guess what a bare time string meant.
-    const { parseTimeOnDateIST } = attendanceHelpers();
-
-    const doc = await RegularizationRequest.create({
-      employeeId,
-      biometricId: bid,
-      employeeName: fullName(emp),
-      designation: emp.designation,
-      department: emp.department,
-      dateStr,
-      type,
-      reason: String(reason).trim(),
-      requestedStatus:
-        type === "wrong_status" ? requestedStatus : requestedStatus || null,
-      proposedInTime: inTime ? parseTimeOnDateIST(inTime, dateStr) : null,
-      proposedOutTime: outTime ? parseTimeOnDateIST(outTime, dateStr) : null,
-      // The singular-punch form is superseded by proposedInTime/proposedOutTime
-      // on this path. The applier still honours it for legacy and HR-filed rows.
-      proposedPunchType: null,
-      proposedPunchTime: null,
-      proposedPunchAction: null,
-      managersNotified: mn,
-      originalSnapshot: snap,
-      status: "pending",
-    });
-
-    const primary = mn.find((m) => m.type === "primary");
-    notify(primary?.managerId, {
-      title: "Attendance correction request",
-      body: `${firstNameOf(doc.employeeName)} asked to correct ${dateStr}. Reason: ${String(
+      doc = await createRegularization({
+        emp,
+        employeeId,
+        dateStr,
+        type,
         reason,
-      ).trim()}`,
-      data: pushData(doc),
-      channelId: "general",
-      categoryId: "general",
-    });
+        inTime,
+        outTime,
+        requestedStatus,
+        source: "employee",
+      });
+    } catch (e) {
+      if (e?.expose) {
+        return res.status(e.status).json({
+          success: false,
+          ...(e.code ? { code: e.code } : {}),
+          message: e.message,
+        });
+      }
+      throw e;
+    }
 
     return res.status(201).json({ success: true, data: doc });
   } catch (err) {

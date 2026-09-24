@@ -74,11 +74,20 @@ function queued(work) {
 /* ── The provider ─────────────────────────────────────────────────── */
 
 /**
- * Ask the provider. Returns the parsed parts, or null for anything at all that
- * goes wrong — a timeout, a 429, a body that is not JSON, a point at sea.
+ * Ask the provider. Returns the parsed parts; `null` when the provider
+ * ANSWERED that there is nothing here (a point at sea, a field with no road);
+ * and FAILED when it did not answer at all — a timeout, a 429, a 5xx, a body
+ * that is not JSON, or no provider configured.
+ *
+ * The two used to be the same `null`, and describe() caches a null for six
+ * months as "this place has no name". So one slow second from Nominatim
+ * blanked a village off the itinerary until spring. A failure is now not
+ * cached: the next screen that needs the name simply asks again.
  */
+const FAILED = Symbol("geocode-failed");
+
 async function lookup(lat, lng) {
-  if (PROVIDER === "none") return null;
+  if (PROVIDER === "none") return FAILED;
 
   const url =
     `${ENDPOINT}?format=jsonv2&lat=${lat}&lon=${lng}` +
@@ -94,9 +103,12 @@ async function lookup(lat, lng) {
       headers: { "User-Agent": USER_AGENT, Referer: CONTACT },
       signal: controller.signal,
     });
-    if (!res.ok) return null;
+    if (!res.ok) return FAILED;
 
     const body = await res.json();
+    // Nominatim answers a point with nothing near it with a 200 and an
+    // `error` — that one IS an answer, and worth remembering.
+    if (body?.error && !body?.address) return null;
     const a = body?.address || {};
 
     // Indian addresses come back with the useful part under a different key
@@ -116,8 +128,9 @@ async function lookup(lat, lng) {
       display: String(body?.display_name || ""),
     };
   } catch {
-    // Deliberately silent — see rule 1. A failed name is not an incident.
-    return null;
+    // Deliberately silent — see rule 1. A failed name is not an incident, and
+    // it is not an answer either, so it is not cached.
+    return FAILED;
   } finally {
     clearTimeout(timer);
   }
@@ -166,7 +179,14 @@ async function describe(lat, lng) {
     // A cache that cannot be read is a slow path, not a broken one.
   }
 
-  const parts = await queued(() => lookup(lat, lng));
+  // With no provider there is nobody to be polite to — skip the queue's
+  // one-second spacing rather than make a screen wait for nothing.
+  const answer = PROVIDER === "none" ? FAILED : await queued(() => lookup(lat, lng));
+
+  // No answer at all: nothing to remember, and an empty name for now.
+  if (answer === FAILED) return { ...empty, failed: true };
+
+  const parts = answer;
   const name = shortName(parts);
 
   // Written whether or not anything was found — see `found` on the model.

@@ -21,10 +21,13 @@
 
 "use strict";
 
+const { isEmployeeActive } = require("../utils/employeeActive");
+const { isFieldStaff } = require("../services/fieldAccess");
+
 const TTL_MS = 5 * 60 * 1000;
 const cache = new Map(); // employeeId -> { at, employee }
 
-/** Call after an employee's name or code changes, so it is not stale for 5 min. */
+/** Call after an employee's name, code, status or department changes, so it is not stale for 5 min. */
 function invalidateFieldEmployee(employeeId) {
   if (employeeId) cache.delete(String(employeeId));
 }
@@ -36,18 +39,28 @@ async function loadEmployee(id) {
 
   const Employee = require("../models/Employee");
   const row = await Employee.findById(key)
-    .select("firstName middleName lastName biometricId phone designation department isActive")
+    .select(
+      "firstName middleName lastName biometricId phone designation department isActive status " +
+        "accessDepartmentId additionalDepartmentIds primaryManager",
+    )
     .lean();
   if (!row) return null;
 
   const employee = {
     id: row._id,
     name: [row.firstName, row.middleName, row.lastName].filter(Boolean).join(" ").trim(),
+    firstName: row.firstName || "",
     code: row.biometricId || "",
     phone: row.phone || "",
     designation: row.designation || "",
     department: row.department || "",
-    isActive: row.isActive !== false,
+    // Both flags, read the one way every guard reads them (utils/employeeActive).
+    isActive: isEmployeeActive(row),
+    // Sales field staff — the only people /api/field's work and location
+    // routes serve, and the only people the app ever asks for a location.
+    isFieldStaff: await isFieldStaff(row),
+    managerId: row.primaryManager?.managerId ? String(row.primaryManager.managerId) : null,
+    managerName: row.primaryManager?.managerName || "",
   };
 
   cache.set(key, { at: Date.now(), employee });

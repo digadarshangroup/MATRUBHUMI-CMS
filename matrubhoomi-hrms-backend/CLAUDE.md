@@ -29,6 +29,25 @@ and a **scratch** database. Forty expectations, and it has already caught
 two bugs that no unit test would have seen. Its header carries the two commands.
 `scripts/salesSchemeFlow_test.js` is its sibling for schemes and approvals — 35
 cases, 143 expectations — and both must be green before a sales change ships.
+`scripts/employeeAppFlow_test.js` is the employee app's — 119 expectations, from
+HR hiring four people to letting one go — and must be green before a change to
+`/api/employee/*`, `/api/field/*` or tracking ships. All three run against a
+SCRATCH database with outside integrations blanked; their headers carry the
+commands.
+
+Three more, same shape, for the rulebooks around the app:
+`scripts/leaveCases_test.js` (92 — every way to ask for leave: bad dates, the
+waiting period, balances and what "held" means, monthly caps, the two halves
+of a day, editing, withdrawing an approved leave, quick leave),
+`scripts/requestCases_test.js` (55 — corrections and overtime) and
+`scripts/featuresFlow_test.js` (57 — the first-sign-in password, app-usage
+recording, announcements, the CEO overview, releases). Run them before
+touching `leaveRoutes.js`, `regularization.js`, `Overtimeroutes.js`, the
+password routes or `/api/ceo/overview`.
+
+`scripts/seedDemo.js` builds a whole demo company THROUGH the API (desk
+logins, ten people, a month of attendance, leave, a recorded round) and
+refuses any database that is not local.
 
 ## Scope — read this before adding anything
 
@@ -170,6 +189,64 @@ Two more things worth knowing:
   configured the code is handed back for the employee to read out — recorded as
   `delivery.status: "manual"` so the weaker path is visible rather than
   disguised.
+
+## The employee app
+
+The Android app (`matrubhoomi-field-app`) is the WHOLE workforce's now, not only
+the sales team's. Five rules hold it together:
+
+- **"Still works here" is `utils/employeeActive.js`**, for every reader — login,
+  the app guard, the field guard, the desk's lists, standings. An exit is either
+  `isActive: false` or an exit `status`; checking one flag is how a leaver kept
+  their app. `AllEmployeeAppMiddleware` refuses a leaver's token at once
+  (`EMPLOYEE_INACTIVE`), and deactivating somebody closes their open field duty
+  (`endDutyForLeaver`).
+- **"Field staff" is `services/fieldAccess.js`**, for what the app shows, what
+  `/api/field/*` accepts and who the desk can assign. Only field staff are ever
+  tracked; everybody else gets `NOT_FIELD_STAFF` from the field routes.
+- **One manager.** `services/approvalChain.js` gives every new leave, correction
+  and overtime request the PRIMARY manager only, whose decision is final. The
+  secondary manager is no longer stored (HR forms, bulk edit, departments).
+- **The inbox.** The server's push is Expo-only, so `utils/notifyEmployee.js`
+  also records every notification in `EmployeeNotification`, which the native
+  app polls (`routes/Employee_Routes/appInbox.js`).
+- **Field attendance.** Ending duty files the day as a correction with
+  `source: "field_duty"` (`services/fieldAttendance.js`) for the manager to
+  confirm in one tap; under `FIELD_ATTENDANCE_MIN_MINUTES` (30) it is not filed.
+
+Tracking is tuned from the environment and handed to the app, never hardcoded
+there: `FIELD_PING_INTERVAL_S`, `FIELD_IDLE_INTERVAL_S`, `FIELD_HEARTBEAT_S`,
+`FIELD_BATCH_INTERVAL_S` (how far behind the live board can be),
+`FIELD_STOP_RADIUS_M`, `FIELD_PLACE_RADIUS_M` (how far a looked-up place name
+still counts as "near"). Place names come from Nominatim via
+`services/reverseGeocode.js` with a `GeoPlace` cache; `GEOCODE_PROVIDER=none`
+turns lookups off (the tests seed `GeoPlace` rows instead).
+
+## Around the app: passwords, usage, announcements, the executive view
+
+- **A 401 means "your session has ended" to every client.** A wrong CURRENT
+  password on `PUT /api/employee/change-password` is a 400 `WRONG_PASSWORD` —
+  it used to be a 401, and the app signed people out for a typo.
+- **Never `.select("+password firstName …")`** on Employee: a `+field` inside
+  an inclusive projection drops the password (see `routes/auth/deptAuth.js`).
+  Both change-password routes had it, and the matcher then accepted the PHONE
+  NUMBER as anybody's current password. Select `"+temporaryPassword"` only.
+- **`mustChangePassword`** on the employee login response is worked out from
+  what was typed (the phone number, or the name+birthday default) — nothing is
+  stored. The app refuses to open until they choose their own.
+- **`Employee.appInfo`** (version, build, device, last seen) is written by
+  `AllEmployeeAppMiddleware` from the app's `X-App-*` headers, throttled, with
+  `updateOne`. HR reads it at `/api/hr/app/adoption`; releases for the native
+  app carry `app: "employee"` and a `versionCode` — the old Expo app's rows
+  have no `app` and the two are never offered to each other.
+- **Announcements** (`routes/HrRoutes/Announcements.js`, mounted for HR and
+  the CEO) are delivered as inbox rows (`kind: "announcement"`), so "read" is
+  the inbox's `readAt`. Taking one back deletes the rows, keeps the record.
+- **`/api/ceo/overview`** is counts only, each bounded by today or an indexed
+  status, each linked to the screen that owns it.
+- **`MEDIA_STORAGE=local`** stores uploads on disk (`MEDIA_LOCAL_DIR`) instead
+  of Cloudinary — for demo and test machines only; public images are served at
+  `/media`, everything else still through `/api/files/<token>`.
 
 ## The company's own particulars
 

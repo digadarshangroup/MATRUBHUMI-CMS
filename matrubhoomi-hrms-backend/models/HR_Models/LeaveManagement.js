@@ -257,6 +257,28 @@ const regularizationRequestSchema = new mongoose.Schema(
     },
     reason: { type: String, required: true },
 
+    // Where the request came from. "employee" is somebody filling in the
+    // form; "field_duty" is the employee app filing a salesperson's day from
+    // the moment they started and ended duty — field staff rarely pass the
+    // fingerprint machine, so without it every field day reads absent. Kept
+    // apart so the manager can see the times were recorded, not typed, and so
+    // a later duty the same day extends this request instead of opening a
+    // second one.
+    source: {
+      type: String,
+      enum: ["employee", "field_duty", "hr"],
+      default: "employee",
+    },
+    // For a field_duty request: what the day looked like on the ground, so the
+    // manager approving it is not approving two bare times.
+    fieldSummary: {
+      distanceKm: { type: Number, default: null },
+      visits: { type: Number, default: null },
+      stops: { type: Number, default: null },
+      dutyStartedAt: { type: Date, default: null },
+      dutyEndedAt: { type: Date, default: null },
+    },
+
     // What the day SHOULD have been. Constrained to the subset an employee may
     // legitimately ask for: every value here is a member of STATUS_ENUM in
     // Dailyattendance.js. Leave codes (L-CL/L-SL/L-EL), absence codes

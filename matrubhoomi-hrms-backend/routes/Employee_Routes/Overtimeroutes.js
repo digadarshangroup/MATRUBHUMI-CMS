@@ -20,6 +20,21 @@
 
 const express = require("express");
 const router = express.Router();
+
+// A malformed id is "not found", never a 500 carrying Mongoose's cast error.
+router.param("id", (req, res, next, id) => {
+  if (!require("mongoose").Types.ObjectId.isValid(id))
+    return res.status(404).json({ success: false, message: "Not found" });
+  next();
+});
+
+/** A real calendar date — the regex alone lets 30 February through. */
+function isRealDate(s) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(s || ""))) return false;
+  const [y, m, d] = String(s).split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
 const mongoose = require("mongoose");
 const multer = require("multer");
 
@@ -46,6 +61,7 @@ const {
   notifyOvertimeRejected,
   notifyOvertimeReminder,
 } = require("../../utils/notifyEmployee");
+const { approvalChain } = require("../../services/approvalChain");
 
 const uploadMiddleware = multer({
   storage: multer.memoryStorage(),
@@ -237,12 +253,19 @@ router.post(
   },
   async (req, res) => {
     try {
-      const { dateStr, description } = req.body;
+      const { dateStr } = req.body;
+      // The manager decides by reading this; a line of spaces says nothing.
+      const description = String(req.body.description || "").trim();
       if (!dateStr || !description) {
         return res.status(400).json({
           success: false,
-          message: "dateStr and description required",
+          message: "Say what you stayed back for.",
         });
+      }
+      if (!isRealDate(dateStr)) {
+        return res
+          .status(400)
+          .json({ success: false, message: "That is not a real date." });
       }
 
       const emp = await Employee.findById(req.user.id)
@@ -303,21 +326,8 @@ router.post(
         };
       }
 
-      const managersNotified = [];
-      if (emp.primaryManager?.managerId) {
-        managersNotified.push({
-          managerId: emp.primaryManager.managerId,
-          managerName: emp.primaryManager.managerName || "",
-          type: "primary",
-        });
-      }
-      if (emp.secondaryManager?.managerId) {
-        managersNotified.push({
-          managerId: emp.secondaryManager.managerId,
-          managerName: emp.secondaryManager.managerName || "",
-          type: "secondary",
-        });
-      }
+      // ONE reporting manager — services/approvalChain.js.
+      const managersNotified = approvalChain(emp);
 
       const report = await OvertimeReport.create({
         employeeId: req.user.id,

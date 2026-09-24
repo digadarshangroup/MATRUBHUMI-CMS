@@ -18,6 +18,22 @@
 // A successful match on (2), (3) or (4) UPGRADES the stored value to a bcrypt
 // hash, so each account converts the first time its owner signs in and the
 // legacy paths quietly drain away rather than living forever.
+//
+// THE DERIVED DEFAULTS ARE ONLY FOR A SYSTEM-ISSUED PASSWORD
+// ----------------------------------------------------------
+// (3) and (4) used to be accepted even after a bcrypt MISMATCH, "so a stale
+// hash cannot block a valid derived password". What that actually did: an
+// employee's phone number — also their login id, and printed on their public
+// profile card — opened their account forever, however many times they
+// changed their password, and signing in with it reset the password back to
+// the phone number.
+//
+// They are accepted now only while the account is still on a credential the
+// system handed out: no stored password at all, or the stored one is still the
+// untouched `temporaryPassword` an Excel import generated (those employees were
+// never told the random string, and the phone number is how they get in). HR's
+// "reset password" writes a bcrypt hash OF the default, so a reset account
+// matches at step (1) and never needs this path.
 
 "use strict";
 
@@ -64,26 +80,72 @@ async function matchesEmployeePassword(employee, plain) {
   if (stored.startsWith("$2")) {
     const ok = await bcrypt.compare(submitted, stored);
     if (ok) return { ok: true, via: "hash", needsUpgrade: false };
-    // Fall through: a stale hash must not block a valid derived password,
-    // otherwise resetting someone to a default would lock them out.
   } else if (stored && stored === submitted) {
     // 2. Legacy plaintext.
     return { ok: true, via: "plaintext", needsUpgrade: true };
   }
 
-  // 3. Firstname@MMDDYYYY
+  // 3 and 4 — the derived defaults. Worked out first, because deciding whether
+  // they are allowed costs a lookup and is only worth paying when one matches.
   const nameDefault = defaultFromNameAndDob(employee.firstName, employee.dateOfBirth);
-  if (nameDefault && submitted === nameDefault) {
-    return { ok: true, via: "default-name-dob", needsUpgrade: true };
-  }
-
-  // 4. Phone default
   const phoneDefault = defaultFromPhone(employee.phone);
-  if (phoneDefault && submitted === phoneDefault) {
-    return { ok: true, via: "default-phone", needsUpgrade: true };
-  }
+  const via =
+    nameDefault && submitted === nameDefault ? "default-name-dob"
+      : phoneDefault && submitted === phoneDefault ? "default-phone"
+        : null;
+  if (!via) return { ok: false, via: null, needsUpgrade: false };
 
+  if (await isOnSystemIssuedPassword(employee, stored)) {
+    return { ok: true, via, needsUpgrade: true };
+  }
   return { ok: false, via: null, needsUpgrade: false };
+}
+
+/**
+ * Is the stored credential still one the employee never chose?
+ *
+ * See the header: true when nothing is stored, or when what is stored is still
+ * the import's `temporaryPassword`. That field is `select: false`, so it is
+ * read here rather than trusted to be on the document the caller loaded.
+ */
+async function isOnSystemIssuedPassword(employee, stored) {
+  if (!stored) return true;
+
+  let temp = employee.temporaryPassword;
+  if (temp === undefined && employee._id) {
+    try {
+      const Employee = require("../models/Employee");
+      const row = await Employee.findById(employee._id).select("+temporaryPassword").lean();
+      temp = row?.temporaryPassword;
+    } catch {
+      return false;
+    }
+  }
+  if (!temp) return false;
+
+  if (stored.startsWith("$2")) {
+    try {
+      return await bcrypt.compare(String(temp), stored);
+    } catch {
+      return false;
+    }
+  }
+  return stored === String(temp);
+}
+
+/**
+ * Store a password the EMPLOYEE chose, and close the derived-default door.
+ *
+ * `temporaryPassword` is cleared in the same write: once somebody has picked
+ * their own password, the import's random string — and with it the
+ * phone-number fallback above — must stop opening the account.
+ */
+async function setChosenEmployeePassword(EmployeeModel, employeeId, plain) {
+  const hash = await bcrypt.hash(String(plain), 10);
+  await EmployeeModel.updateOne(
+    { _id: employeeId },
+    { $set: { password: hash, updatedAt: new Date() }, $unset: { temporaryPassword: 1 } },
+  );
 }
 
 /**
@@ -110,6 +172,7 @@ async function upgradeEmployeePassword(EmployeeModel, employeeId, plain) {
 module.exports = {
   matchesEmployeePassword,
   upgradeEmployeePassword,
+  setChosenEmployeePassword,
   defaultFromNameAndDob,
   defaultFromPhone,
 };

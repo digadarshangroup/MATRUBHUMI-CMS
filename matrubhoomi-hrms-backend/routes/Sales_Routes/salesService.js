@@ -14,6 +14,7 @@ const SalesLead = require("../../models/Sales_Models/SalesLead");
 const SalesTask = require("../../models/Sales_Models/SalesTask");
 const { createWithCode } = require("../../services/salesCodes");
 const { createAssignment } = require("../../services/salesTasks");
+const { notifyTasksAssigned } = require("../../services/salesNotify");
 const { deskRead, deskWrite, actorFrom, sendError } = require("./_deskAuth");
 
 router.get("/", deskRead, async (req, res) => {
@@ -130,6 +131,8 @@ router.post("/:id/assign", deskWrite, async (req, res) => {
     request.status = "assigned";
     request.taskIds.push(...tasks.map((t) => t._id));
     await request.save();
+
+    notifyTasksAssigned(tasks);
 
     const io = req.app.get("io");
     if (io) {

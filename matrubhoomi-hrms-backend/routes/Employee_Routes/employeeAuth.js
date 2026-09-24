@@ -2,16 +2,52 @@
 
 const express = require("express");
 const router = express.Router();
-const bcrypt = require("bcryptjs");
 const Employee = require("../../models/Employee");
 const AllEmployeeAppMiddleware = require("../../Middlewear/AllEmployeeAppMiddleware");
 const { decryptSalaryFields } = require("../../utils/salaryEncryption");
+const {
+  matchesEmployeePassword,
+  setChosenEmployeePassword,
+} = require("../../utils/employeePassword");
 
-// Default password = employee's mobile number
-const generateDefaultPassword = (phone) => {
-  if (!phone) return null;
-  return phone.trim();
-};
+/**
+ * What an employee may change about THEMSELVES from the app.
+ *
+ * An ALLOW list, not the block list this used to be. The block list missed
+ * salary (written in clear text, because findByIdAndUpdate skips the
+ * encryption hook), status, employmentType, designation, department and access
+ * ids — the last two grant a CMS login — plus bank details, which is how a
+ * stolen phone redirects a salary. Everything not named here stays with HR.
+ */
+const SELF_EDITABLE = [
+  "nickName",
+  "alternatePhone",
+  "personalEmail",
+  "bloodGroup",
+  "maritalStatus",
+  "marriageDate",
+  "spouseName",
+  "spouseDOB",
+];
+const SELF_EDITABLE_ADDRESS = ["street", "city", "state", "pincode", "country", "ownershipType"];
+
+/** Flatten an allowed subset of the body into a `$set`, dropping everything else. */
+function selfEditableUpdate(body = {}) {
+  const set = {};
+  for (const key of SELF_EDITABLE) {
+    if (Object.prototype.hasOwnProperty.call(body, key)) set[key] = body[key];
+  }
+  for (const which of ["current", "permanent"]) {
+    const part = body?.address?.[which];
+    if (!part || typeof part !== "object") continue;
+    for (const key of SELF_EDITABLE_ADDRESS) {
+      if (Object.prototype.hasOwnProperty.call(part, key)) {
+        set[`address.${which}.${key}`] = part[key];
+      }
+    }
+  }
+  return set;
+}
 
 // Get employee profile - COMPLETE VERSION with all fields
 router.get("/profile", AllEmployeeAppMiddleware, async (req, res) => {
@@ -211,48 +247,27 @@ router.get("/profile/edit", AllEmployeeAppMiddleware, async (req, res) => {
 router.put("/profile", AllEmployeeAppMiddleware, async (req, res) => {
   try {
     const { user } = req;
-    const updateData = req.body;
+    const set = selfEditableUpdate(req.body);
 
-    // Remove restricted fields that employees shouldn't change
-    const restrictedFields = [
-      "password",
-      "employeeId",
-      "biometricId",
-      "email",
-      "phone",
-      "phoneNumber",
-      "department",
-      "role",
-      "createdBy",
-      "createdAt",
-      "isActive",
-      "dateOfJoining",
-      "primaryManager",
-      "secondaryManager",
-      "biometricId",
-      "identityId",
-    ];
-
-    restrictedFields.forEach((field) => {
-      delete updateData[field];
-    });
-
-    // Also remove any field that starts with $ (MongoDB operators)
-    Object.keys(updateData).forEach((key) => {
-      if (key.startsWith("$")) {
-        delete updateData[key];
-      }
-    });
+    if (Object.keys(set).length === 0) {
+      return res.status(400).json({
+        success: false,
+        code: "NOTHING_EDITABLE",
+        message:
+          "Nothing in this request can be changed from the app. Ask HR to update " +
+          "your work, bank or identity details.",
+      });
+    }
 
     // Update employee
     const updatedEmployee = await Employee.findByIdAndUpdate(
       user.id,
-      updateData,
+      { $set: set },
       {
         new: true,
         runValidators: true,
       },
-    ).select("-password -temporaryPassword -__v");
+    ).select("-password -temporaryPassword -__v -salary -bankDetails -documents");
 
     if (!updatedEmployee) {
       return res.status(404).json({
@@ -299,16 +314,27 @@ router.put("/change-password", AllEmployeeAppMiddleware, async (req, res) => {
       });
     }
 
-    if (newPassword.length < 6) {
+    if (String(newPassword).length < 6) {
       return res.status(400).json({
         success: false,
         message: "New password must be at least 6 characters long",
       });
     }
+    if (String(newPassword) === String(currentPassword)) {
+      return res.status(400).json({
+        success: false,
+        code: "SAME_PASSWORD",
+        message: "Choose a password different from the current one.",
+      });
+    }
 
     // Find employee with password
     const employee = await Employee.findById(user.id).select(
-      "+password firstName dateOfBirth",
+      // NOT "+password firstName …": a `+field` inside an INCLUSIVE
+      // projection makes mongoose drop the password, and the matcher then
+      // accepted the PHONE NUMBER as the current password for everybody
+      // (and refused the real one). Same trap as routes/auth/deptAuth.js.
+      "+temporaryPassword",
     );
     if (!employee) {
       return res.status(404).json({
@@ -317,46 +343,33 @@ router.put("/change-password", AllEmployeeAppMiddleware, async (req, res) => {
       });
     }
 
-    // Verify current password - Check multiple methods
-    let isPasswordValid = false;
-
-    // Method 1: Check with stored hashed password
-    if (employee.password) {
-      if (employee.password.startsWith("$2")) {
-        isPasswordValid = await bcrypt.compare(
-          currentPassword,
-          employee.password,
-        );
-      } else {
-        isPasswordValid = currentPassword === employee.password;
-      }
-    }
-
-    // Method 2: Check with default password format
-    if (!isPasswordValid && employee.firstName && employee.dateOfBirth) {
-      const defaultPassword = generateDefaultPassword(
-        employee.firstName,
-        employee.dateOfBirth,
-      );
-      isPasswordValid = currentPassword === defaultPassword;
-    }
-
-    if (!isPasswordValid) {
-      return res.status(401).json({
+    // The one matcher every login uses (utils/employeePassword.js). This used
+    // to accept a name-derived default whatever the stored password was, so
+    // the current password was not actually needed to change it.
+    const match = await matchesEmployeePassword(employee, currentPassword);
+    if (!match.ok) {
+      // 400, NOT 401. Every client of this API treats a 401 as "the session
+      // has ended" — the app signed its user out for mistyping their OLD
+      // password in the change-password form.
+      return res.status(400).json({
         success: false,
+        code: "WRONG_PASSWORD",
         message: "Current password is incorrect",
       });
     }
+    // The phone number is the login id, printed on the ID card: as a
+    // password it protects nothing, and it is what HR's reset hands out.
+    if (String(newPassword) === String(employee.phone || "")) {
+      return res.status(400).json({
+        success: false,
+        code: "PHONE_AS_PASSWORD",
+        message: "Your phone number can't be your password — anyone with your ID card knows it.",
+      });
+    }
 
-    // Hash new password
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(newPassword, salt);
-
-    // Update password in database
-    await Employee.findByIdAndUpdate(user.id, {
-      password: hashedPassword,
-      updatedAt: Date.now(),
-    });
+    // Also clears the import's temporary password, which is what closes the
+    // phone-number fallback for this account from now on.
+    await setChosenEmployeePassword(Employee, user.id, newPassword);
 
     res.status(200).json({
       success: true,
