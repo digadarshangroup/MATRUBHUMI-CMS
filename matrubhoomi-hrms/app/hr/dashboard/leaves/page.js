@@ -182,7 +182,8 @@ async function deriveReserved(employee) {
     const d = await apiFetch(
       `/api/hr/leaves/?year=${year}&limit=200&search=${encodeURIComponent(name)}`,
     );
-    const rows = d?.data || [];
+    // The list answers { applications, … }, not a bare array.
+    const rows = Array.isArray(d?.data) ? d.data : d?.data?.applications || [];
     const out = { ...empty };
     for (const a of rows) {
       const owner = String(a.employeeId?._id || a.employeeId || "");
@@ -222,6 +223,8 @@ function HRAddLeaveModal({ onClose, onSuccess, config: pageConfig }) {
   const [docUploading, setDocUploading] = useState(false);
   const [error, setError] = useState("");
   const [done, setDone] = useState(false);
+  // The server's own words when part of the leave went unpaid.
+  const [doneNote, setDoneNote] = useState("");
 
   const slThreshold = pageConfig?.slDocumentThreshold ?? 2;
 
@@ -347,11 +350,13 @@ function HRAddLeaveModal({ onClose, onSuccess, config: pageConfig }) {
         }
       }
 
+      const unpaid = Number(res.lwpDays) > 0;
+      setDoneNote(unpaid ? res.message : "");
       setDone(true);
       setTimeout(() => {
         onSuccess?.();
         onClose();
-      }, 1600);
+      }, unpaid ? 5000 : 1600);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -399,6 +404,11 @@ function HRAddLeaveModal({ onClose, onSuccess, config: pageConfig }) {
             <p className="text-xs text-ink-muted">
               {form.leaveType} for {employee?.firstName} approved immediately
             </p>
+            {doneNote && (
+              <p className="max-w-[320px] text-center text-xs text-[var(--state-rework-ink)]">
+                {doneNote}
+              </p>
+            )}
           </div>
         ) : (
           <div className="scroll-slim min-h-0 flex-1 overflow-y-auto px-5 py-4 space-y-4">

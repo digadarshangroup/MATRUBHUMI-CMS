@@ -5,6 +5,7 @@ import Hr_DashboardLayout from "@/components/Hr_DashboardLayout";
 import RoleGate from "@/components/access/RoleGate";
 import { useState, useEffect, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
+import toast from "react-hot-toast";
 import {
   Panel,
   PanelHead,
@@ -58,6 +59,8 @@ import {
   DownloadIcon,
   Fingerprint,
   IdCard,
+  Send,
+  Smartphone,
 } from "lucide-react";
 
 /* A read-only field: label above, value on a sunken inset. Presentation only. */
@@ -141,6 +144,31 @@ export default function EmployeeViewPage() {
     router.push(
       `/hr/dashboard/employees/new-employee?edit=true&id=${employeeId}`,
     );
+  };
+
+  // The welcome email again — for one that never arrived. The server refuses
+  // once they have chosen their own password (a reset is the way then) and
+  // says why, so the message is shown as it comes.
+  const [sendingLogin, setSendingLogin] = useState(false);
+  const sendLoginDetails = async () => {
+    const who = employee?.basicInfo?.fullName || "this employee";
+    const to = employee?.basicInfo?.email;
+    if (!confirm(`Email ${who} how to sign in to the app${to ? ` (to ${to})` : ""}?`)) return;
+    setSendingLogin(true);
+    try {
+      const r = await fetch(
+        `${API_URL}/api/employees/${employeeId}/send-login-details`,
+        { method: "POST", credentials: "include" },
+      );
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.success) throw new Error(d.message || "Could not send the email");
+      toast.success(d.message);
+      fetchEmployeeDetails();
+    } catch (e) {
+      toast.error(e.message, { duration: 7000 });
+    } finally {
+      setSendingLogin(false);
+    }
   };
 
   const handleBack = () => {
@@ -395,10 +423,42 @@ export default function EmployeeViewPage() {
                       </Chip>
                     )}
                     {getStatusBadge(employee.workInfo.status)}
+                    {employee.loginInfo?.appLastSeenAt ? (
+                      <Chip
+                        tone="positive"
+                        title={`Last used the app ${new Date(employee.loginInfo.appLastSeenAt).toLocaleString("en-IN")}`}
+                      >
+                        <Smartphone className="h-3.5 w-3.5" />
+                        Uses the app
+                      </Chip>
+                    ) : employee.loginInfo?.emailError ? (
+                      <Chip tone="overdue" title={employee.loginInfo.emailError}>
+                        <Mail className="h-3.5 w-3.5" />
+                        Sign-in email failed
+                      </Chip>
+                    ) : employee.loginInfo?.emailSent ? (
+                      <Chip
+                        title={`Emailed ${employee.loginInfo.emailSentAt ? new Date(employee.loginInfo.emailSentAt).toLocaleString("en-IN") : ""}`}
+                      >
+                        <Mail className="h-3.5 w-3.5" />
+                        Sign-in details emailed
+                      </Chip>
+                    ) : null}
                   </div>
                 </div>
 
                 <div className="flex shrink-0 items-center gap-2">
+                  <RoleGate min="editor">
+                    <Button
+                      size="sm"
+                      onClick={sendLoginDetails}
+                      disabled={sendingLogin}
+                      title="Email them their phone number and first password for the employee app"
+                    >
+                      <Send className="h-4 w-4" />
+                      {sendingLogin ? "Sending…" : "Email sign-in details"}
+                    </Button>
+                  </RoleGate>
                   <RoleGate min="editor">
                     <Button tone="primary" size="sm" onClick={handleEdit}>
                       <Edit className="h-4 w-4" />

@@ -4,7 +4,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // LEAVE BALANCES TAB — one row per active employee with CL/SL/PL
 // entitlement + consumed + available, sortable, searchable, filterable
-// by department. Powered by GET /api/hr/leaves/all-balances.
+// by department. Powered by GET /api/hr/leaves/all-balances, which works the
+// figures out with the same helper as the employee app's own balance
+// (backend utils/leaveBalance.js) — so "available" here and "left" on the
+// phone differ only by the days a waiting request holds, shown as "on hold".
 //
 // Used by app/hr/dashboard/leaves/page.js as the third tab.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -445,6 +448,7 @@ function BalanceRow({ row }) {
       </td>
       <BalanceCell
         available={row.available.CL}
+        onHold={row.reserved?.CL}
         consumed={row.consumed.CL}
         entitlement={row.entitlement.CL}
         pct={clPct}
@@ -452,6 +456,7 @@ function BalanceRow({ row }) {
       />
       <BalanceCell
         available={row.available.SL}
+        onHold={row.reserved?.SL}
         consumed={row.consumed.SL}
         entitlement={row.entitlement.SL}
         pct={slPct}
@@ -459,6 +464,7 @@ function BalanceRow({ row }) {
       />
       <BalanceCell
         available={row.available.PL}
+        onHold={row.reserved?.PL}
         consumed={row.consumed.PL}
         entitlement={row.entitlement.PL}
         pct={plPct}
@@ -471,6 +477,7 @@ function BalanceRow({ row }) {
 
 function BalanceCell({
   available,
+  onHold = 0,
   consumed,
   entitlement,
   pct,
@@ -509,6 +516,17 @@ function BalanceCell({
         <span data-figure className={`font-medium ${color}`}>
           {available}
         </span>
+        {onHold > 0 && (
+          // Days a request still waiting for a decision holds. The
+          // employee's app already counts them out of what is "left".
+          <span
+            data-figure
+            className="block text-[10px] leading-tight text-[var(--state-rework-ink)]"
+            title={`${onHold} day(s) held by a request that is still waiting — the employee's app shows ${Math.max(0, available - onHold)} left`}
+          >
+            {onHold} on hold
+          </span>
+        )}
       </td>
       <td className="border-b border-hairline px-2 py-2.5 text-center">
         <div className="flex flex-col items-center gap-1">

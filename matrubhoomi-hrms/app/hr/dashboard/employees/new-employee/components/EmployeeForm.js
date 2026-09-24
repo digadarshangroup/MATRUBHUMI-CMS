@@ -1814,7 +1814,19 @@ export default function EmployeeForm() {
 
       if (!res.ok) throw new Error(data.message || `Error ${res.status}`);
       if (data.success) {
-        alert("Employee created successfully!");
+        // How they sign in, and whether the email carrying it is on its way —
+        // when it is not, HR has to pass the details on themselves.
+        const phone = data.data?.phone || "";
+        const how = `They sign in to the Matrubhoomi Employee app with their phone number${phone ? ` ${phone}` : ""}. That is also their first password — the app asks them to choose their own.`;
+        const mail =
+          data.loginEmail === "sending"
+            ? `These details are being emailed to ${data.data?.email}.`
+            : data.loginEmail === "no_email"
+              ? "There is no email address on the record, so please give them these details yourself."
+              : data.loginEmail === "off"
+                ? "Emails are switched off on this server, so please give them these details yourself."
+                : "";
+        alert(`Employee created.\n\n${how}${mail ? `\n\n${mail}` : ""}`);
         router.push("/hr/dashboard/employees");
       } else {
         setError(data.message || "Something went wrong");

@@ -314,6 +314,8 @@ function ChangePasswordModal({ user, onClose, onSuccess }) {
 function ResetPasswordModal({ user, onClose, onSuccess }) {
   const [loading, setLoading] = useState(false);
   const [tempPassword, setTempPassword] = useState("");
+  const [emailedTo, setEmailedTo] = useState(null);
+  const [emailError, setEmailError] = useState(null);
   const [copied, setCopied] = useState(false);
 
   async function handleReset() {
@@ -326,6 +328,8 @@ function ResetPasswordModal({ user, onClose, onSuccess }) {
       const data = await res.json();
       if (!data.success) throw new Error(data.message);
       setTempPassword(data.temporaryPassword);
+      setEmailedTo(data.emailedTo || null);
+      setEmailError(data.emailError || null);
     } catch (err) {
       onSuccess(null, err.message || "Reset failed.");
       onClose();
@@ -364,12 +368,21 @@ function ResetPasswordModal({ user, onClose, onSuccess }) {
         <div className="scroll-slim min-h-0 flex-1 overflow-y-auto px-5 py-4">
           {!tempPassword ? (
             <div className="space-y-4">
-              <p className="text-sm leading-relaxed text-ink-muted">
-                A secure temporary password will be generated for{" "}
-                <span className="font-medium text-ink">{user.name}</span>. Share
-                it with them through a secure channel. They should update it on
-                next login.
-              </p>
+              {user.userType === "employee" ? (
+                <p className="text-sm leading-relaxed text-ink-muted">
+                  <span className="font-medium text-ink">{user.name}</span>
+                  &apos;s password goes back to their phone number, and the app
+                  asks them to choose a new one when they sign in. If emails are
+                  on, they are emailed the details as well.
+                </p>
+              ) : (
+                <p className="text-sm leading-relaxed text-ink-muted">
+                  A secure temporary password will be generated for{" "}
+                  <span className="font-medium text-ink">{user.name}</span>.
+                  Share it with them through a secure channel. They should
+                  update it on next login.
+                </p>
+              )}
               <div className="flex gap-2.5">
                 <Button onClick={onClose} className="flex-1">
                   Cancel
@@ -397,6 +410,17 @@ function ResetPasswordModal({ user, onClose, onSuccess }) {
                 Temporary password generated. Copy and share it securely — it
                 will not be shown again.
               </p>
+              {emailedTo && (
+                <p className="text-xs text-[var(--state-positive-ink)]">
+                  Also emailed to {emailedTo}, with how to sign in.
+                </p>
+              )}
+              {emailError && (
+                <p className="text-xs text-[var(--state-overdue-ink)]">
+                  The email to them could not be sent ({emailError}) — please
+                  pass it on yourself.
+                </p>
+              )}
               <div className="flex items-center gap-2">
                 <div
                   data-figure
