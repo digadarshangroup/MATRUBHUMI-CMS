@@ -57,6 +57,13 @@ refuses to run if that points anywhere else. Run it before touching
 logins, ten people, a month of attendance, leave, a recorded round) and
 refuses any database that is not local.
 
+`scripts/seedLiveTesters.js` is its opposite number for the LIVE database: six
+clearly-marked test people (phones 555…, emails @matrubhumi.test, names
+"(Test)") and an HR and a Sales desk login, written directly so no email goes
+out, with no department roles or default managers touched.
+`--remove --yes` takes them — and everything they made — back out; run it
+before the first real payroll.
+
 ## Scope — read this before adding anything
 
 This deployment has **four surfaces**: HR, the executive office (an HR overview
