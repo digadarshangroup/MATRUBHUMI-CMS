@@ -23,6 +23,7 @@ import {
   CheckSquare,
   SlidersHorizontal,
   BookOpen,
+  Globe,
 } from "lucide-react";
 import FrostShell from "@/components/shell/FrostShell";
 import { useDeptRole } from "@/components/access/useDeptRole";
@@ -55,6 +56,16 @@ const NAV = [
   { key: "configuration", name: "Configuration", href: "/sales/dashboard/configuration", icon: SlidersHorizontal, minRole: "editor" },
   { key: "forms", name: "Form templates", href: "/sales/dashboard/forms", icon: FileSpreadsheet, minRole: "editor" },
   { key: "pipeline", name: "Pipeline stages", href: "/sales/dashboard/pipeline", icon: GitBranch, minRole: "editor" },
+
+  // Its own section rather than a fourth item under Setup, because what it
+  // edits is not this dashboard: these rows are published to the public
+  // marketing site, where anyone on the internet reads them. A heading that
+  // says so is the cheapest way to stop somebody treating the form like an
+  // internal note. "Schemes" here also means the government programmes on the
+  // website, NOT the sales pipelines under Configuration — see
+  // models/Website_Models/WebsiteScheme.js for why the two stay apart.
+  { section: "Public website" },
+  { key: "website-schemes", name: "Scheme listings", href: "/sales/dashboard/website-schemes", icon: Globe, minRole: "editor" },
 ];
 
 export default function SalesDashboardLayout({ children, activeMenu }) {

@@ -350,6 +350,11 @@ app.use("/api/change-requests", require("./routes/Access/changeRequests"));
 // Returns names and icons only; never emails, counts or user data.
 app.use("/api/public", require("./routes/Admin/publicDepartments"));
 
+// Also unauthenticated: the government scheme cards on the public marketing
+// site. Published rows only, and an explicit field list — the desk's own view
+// of the same rows is /api/website/schemes, behind the sales guard.
+app.use("/api/public", require("./routes/Admin/publicSchemes"));
+
 // Stored documents that are not images — leave certificates, overtime proof,
 // the employee-app APK. They live PRIVATELY in Cloudinary and are streamed
 // from here, because this account refuses public delivery of PDF and ZIP and
@@ -443,6 +448,12 @@ app.use("/api/sales", require("./routes/Sales_Routes/salesSchemeRoutes"));
 // edited together, and splitting them put half the designer behind one mount
 // and half behind another.
 app.use("/api/sales", require("./routes/Sales_Routes/salesTemplates"));
+
+// The public website's scheme listings, edited from the Sales dashboard but
+// mounted on their own path rather than under /api/sales — these rows are
+// brochure content, not pipeline machinery, and the SalesScheme above is a
+// different idea wearing the same word. The model header explains the split.
+app.use("/api/website/schemes", require("./routes/Website_Routes/websiteSchemes"));
 
 // The Android field app. A DIFFERENT identity from everything above — the
 // employee token, not a department session — which is why it is a separate
